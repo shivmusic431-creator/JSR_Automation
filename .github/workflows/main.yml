@@ -196,10 +196,113 @@ jobs:
             --run-id "$RUN_ID" \
             --status "${{ job.status }}"
 
+  # Phase 2.5: Subtitle Generation with Vosk Hindi Model
+  generate-subtitles:
+    runs-on: ubuntu-latest
+    needs: generate-audio
+    timeout-minutes: 30
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Python Dependencies
+        run: |
+          pip install -r src/video_generation/requirements.txt
+          pip install vosk>=0.3.45
+
+      - name: Download Audio Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: audio-${{ env.RUN_ID }}
+          path: output/
+
+      - name: Cache Vosk Hindi Model
+        id: cache-vosk
+        uses: actions/cache@v4
+        with:
+          path: models/vosk-model-hi-0.22
+          key: vosk-model-hi-0.22-${{ runner.os }}-v1
+          restore-keys: |
+            vosk-model-hi-0.22-
+
+      - name: Download Vosk Hindi Model (if not cached)
+        if: steps.cache-vosk.outputs.cache-hit != 'true'
+        run: |
+          chmod +x scripts/download_vosk_model.sh
+          ./scripts/download_vosk_model.sh
+
+      - name: Verify Model
+        run: |
+          if [ -d "models/vosk-model-hi-0.22" ]; then
+            echo "✅ Model verified at models/vosk-model-hi-0.22"
+            ls -la models/vosk-model-hi-0.22/ | head -5
+          else
+            echo "❌ Model missing"
+            exit 1
+          fi
+
+      - name: Generate Subtitles with Dynamic Audio Detection
+        env:
+          RUN_ID: ${{ env.RUN_ID }}
+        run: |
+          python src/video_generation/generate_subtitles.py \
+            --run-id "$RUN_ID" \
+            --audio-dir output/
+
+      - name: Validate Subtitles (Center Alignment Check)
+        run: |
+          if [ -f "output/subtitles.srt" ]; then
+            LINE_COUNT=$(wc -l < output/subtitles.srt)
+            SUB_COUNT=$((LINE_COUNT / 4))
+            echo "✅ Subtitles generated: $SUB_COUNT subtitles"
+            
+            # Check for center alignment marker
+            if grep -q "{\\\\an5}" output/subtitles.srt; then
+              echo "✅ Center alignment marker {\\an5} found"
+            else
+              echo "❌ Center alignment marker missing - this is required"
+              exit 1
+            fi
+            
+            echo "📄 First 10 lines of subtitle file:"
+            head -10 output/subtitles.srt
+          else
+            echo "❌ Subtitle file not found"
+            exit 1
+          fi
+
+      - name: Upload Subtitles Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: subtitles-${{ env.RUN_ID }}
+          path: output/subtitles.srt
+          retention-days: 1
+
+      - name: Notify Tier 1
+        if: always()
+        env:
+          TIER1_WEBHOOK_URL: ${{ secrets.TIER1_WEBHOOK_URL }}
+          TIER1_HEALTH_URL: ${{ secrets.TIER1_HEALTH_URL }}
+        run: |
+          python src/video_generation/notify_webhook.py \
+            --action "subtitles_generated" \
+            --run-id "$RUN_ID" \
+            --status "${{ job.status }}"
+
   # Phase 3: Asset Acquisition
   acquire-assets:
     runs-on: ubuntu-latest
-    needs: generate-audio
+    needs: generate-subtitles
     timeout-minutes: 360
     outputs:
       clip_count: ${{ steps.assets.outputs.clip_count }}
@@ -316,10 +419,10 @@ jobs:
             --run-id "$RUN_ID" \
             --status "${{ job.status }}"
 
-  # Phase 5: Video Editing (Long)
+  # Phase 5: Video Editing (Long) with Subtitles
   edit-video-long:
     runs-on: ubuntu-latest
-    needs: [generate-audio, acquire-assets]
+    needs: [generate-audio, acquire-assets, generate-subtitles]
     timeout-minutes: 360
     steps:
       - name: Checkout Repository
@@ -339,18 +442,44 @@ jobs:
       - name: Organize Files
         run: |
           mkdir -p output/final
-          mv output/script-${{ env.RUN_ID }}/script.json output/ 2>/dev/null || true
-          mv output/audio-${{ env.RUN_ID }}/audio.wav output/ 2>/dev/null || true
-          mv output/assets-${{ env.RUN_ID }}/* output/clips/ 2>/dev/null || true
+          # Copy script
+          if [ -d "output/script-${{ env.RUN_ID }}" ]; then
+            cp output/script-${{ env.RUN_ID }}/script.json output/ 2>/dev/null || true
+          fi
+          
+          # Copy audio (handle any filename)
+          if [ -d "output/audio-${{ env.RUN_ID }}" ]; then
+            cp output/audio-${{ env.RUN_ID }}/*.wav output/ 2>/dev/null || true
+            echo "✅ Audio files copied:"
+            ls -la output/*.wav 2>/dev/null || echo "No WAV files found"
+          fi
+          
+          # Copy assets
+          if [ -d "output/assets-${{ env.RUN_ID }}" ]; then
+            mkdir -p output/clips/
+            cp output/assets-${{ env.RUN_ID }}/* output/clips/ 2>/dev/null || true
+          fi
+          
+          # Copy subtitles
+          if [ -d "output/subtitles-${{ env.RUN_ID }}" ]; then
+            cp output/subtitles-${{ env.RUN_ID }}/subtitles.srt output/ 2>/dev/null || true
+            echo "✅ Subtitles found for video editing"
+          else
+            echo "⚠️ Subtitles not found"
+          fi
+          
+          echo "📁 Files organized for editing:"
+          ls -la output/
 
-      - name: Edit Long Video
+      - name: Edit Long Video with Subtitles (Auto-detect Audio)
         run: |
           python src/video_generation/edit_video.py \
             --type long \
             --script-file output/script.json \
-            --audio-file output/audio.wav \
             --clips-dir output/clips/ \
-            --run-id "$RUN_ID"
+            --subtitles-file output/subtitles.srt \
+            --run-id "$RUN_ID" \
+            --audio-dir output/
 
       - name: Quality Check
         run: |
@@ -377,10 +506,10 @@ jobs:
             --status "${{ job.status }}" \
             --video-type "long"
 
-  # Phase 6: Video Editing (Short) with Viral Hooks
+  # Phase 6: Video Editing (Short) with Viral Hooks and Subtitles
   edit-video-short:
     runs-on: ubuntu-latest
-    needs: [generate-audio, acquire-assets]
+    needs: [generate-audio, acquire-assets, generate-subtitles]
     timeout-minutes: 360
     steps:
       - name: Checkout Repository
@@ -409,9 +538,34 @@ jobs:
       - name: Organize Files
         run: |
           mkdir -p output/final
-          mv output/script-${{ env.RUN_ID }}/script.json output/ 2>/dev/null || true
-          mv output/audio-${{ env.RUN_ID }}/audio.wav output/ 2>/dev/null || true
-          mv output/assets-${{ env.RUN_ID }}/* output/clips/ 2>/dev/null || true
+          # Copy script
+          if [ -d "output/script-${{ env.RUN_ID }}" ]; then
+            cp output/script-${{ env.RUN_ID }}/script.json output/ 2>/dev/null || true
+          fi
+          
+          # Copy audio (handle any filename)
+          if [ -d "output/audio-${{ env.RUN_ID }}" ]; then
+            cp output/audio-${{ env.RUN_ID }}/*.wav output/ 2>/dev/null || true
+            echo "✅ Audio files copied:"
+            ls -la output/*.wav 2>/dev/null || echo "No WAV files found"
+          fi
+          
+          # Copy assets
+          if [ -d "output/assets-${{ env.RUN_ID }}" ]; then
+            mkdir -p output/clips/
+            cp output/assets-${{ env.RUN_ID }}/* output/clips/ 2>/dev/null || true
+          fi
+          
+          # Copy subtitles
+          if [ -d "output/subtitles-${{ env.RUN_ID }}" ]; then
+            cp output/subtitles-${{ env.RUN_ID }}/subtitles.srt output/ 2>/dev/null || true
+            echo "✅ Subtitles found for short video"
+          else
+            echo "⚠️ Subtitles not found"
+          fi
+          
+          echo "📁 Files organized for short video:"
+          ls -la output/
 
       - name: Generate Viral Hook
         env:
@@ -429,16 +583,17 @@ jobs:
             --script-file output/script.json \
             --run-id "$RUN_ID"
 
-      - name: Edit Short Video with Hook Overlay
+      - name: Edit Short Video with Hook Overlay and Subtitles (Auto-detect Audio)
         run: |
           python src/video_generation/edit_video.py \
             --type short \
             --script-file output/script.json \
-            --audio-file output/audio.wav \
             --clips-dir output/clips/ \
+            --subtitles-file output/subtitles.srt \
             --run-id "$RUN_ID" \
             --hook-file output/hook.json \
-            --cta-file output/cta.json
+            --cta-file output/cta.json \
+            --audio-dir output/
 
       - name: Quality Check
         run: |
@@ -465,7 +620,7 @@ jobs:
             --status "${{ job.status }}" \
             --video-type "short"
 
-  # Phase 7: Direct YouTube Upload (Replaces Cloudinary)
+  # Phase 7: Direct YouTube Upload
   upload-to-youtube:
     runs-on: ubuntu-latest
     needs: [edit-video-long, edit-video-short, generate-thumbnail]
@@ -514,6 +669,12 @@ jobs:
           # Copy JSON files
           if [ -d "output/script-${{ env.RUN_ID }}" ]; then
             cp output/script-${{ env.RUN_ID }}/script.json output/upload/ 2>/dev/null || echo "⚠️ Script not found"
+          fi
+          
+          # Copy subtitles (optional for YouTube)
+          if [ -d "output/subtitles-${{ env.RUN_ID }}" ]; then
+            cp output/subtitles-${{ env.RUN_ID }}/subtitles.srt output/upload/ 2>/dev/null || echo "⚠️ Subtitles not found"
+            echo "✅ Subtitles included for upload"
           fi
           
           # Copy hook and cta if they exist
@@ -573,12 +734,6 @@ jobs:
             echo "✅ Short Video ID: $SHORT_VIDEO_ID"
           fi
 
-      - name: Upload Thumbnail (Optional)
-        if: false
-        run: |
-          echo "🖼️ Thumbnail upload via YouTube API can be implemented here"
-          # This would require additional OAuth scopes
-
       - name: Notify Tier 1 - YouTube Upload Complete
         env:
           TIER1_WEBHOOK_URL: ${{ secrets.TIER1_WEBHOOK_URL }}
@@ -627,6 +782,7 @@ jobs:
             audio-${{ env.RUN_ID }}
             assets-${{ env.RUN_ID }}
             thumbnail-${{ env.RUN_ID }}
+            subtitles-${{ env.RUN_ID }}
             video-long-${{ env.RUN_ID }}
             video-short-${{ env.RUN_ID }}
           failOnError: false

@@ -25,3 +25,6 @@ pandas>=2.0.0
 # Utilities
 tqdm>=4.66.0
 python-dateutil>=2.8.2
+
+# Speech recognition for subtitles
+vosk>=0.3.45
