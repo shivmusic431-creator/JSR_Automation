@@ -189,7 +189,7 @@ def verify_model() -> bool:
         return False
     
     # Check for required model files
-    required_files = ['am', 'conf/model.conf', 'graph', 'feat.params']
+    required_files = ['am', 'conf/model.conf', 'graph']
     missing = []
     
     for req in required_files:
