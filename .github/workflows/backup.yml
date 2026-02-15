@@ -1,0 +1,125 @@
+name: YT-AutoPilot - Backup Pipeline
+
+on:
+  schedule:
+    - cron: '0 4 * * *'  # 4:00 AM IST (10:30 PM UTC previous day)
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+env:
+  PYTHON_VERSION: '3.10'
+
+jobs:
+  check-and-trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Dependencies
+        run: |
+          pip install -r src/video_generation/requirements.txt
+
+      - name: Check if Backup Needed
+        id: check
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          TIER1_HEALTH_URL: ${{ secrets.TIER1_HEALTH_URL }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python src/video_generation/check_backup_needed.py
+          # Capture outputs from the script
+          echo "backup_needed=$(python -c "import os; print(os.getenv('BACKUP_NEEDED', 'false'))")" >> $GITHUB_OUTPUT
+          echo "category=$(python -c "import os; print(os.getenv('CATEGORY_OUTPUT', 'Human Psychology & Behavior'))")" >> $GITHUB_OUTPUT
+          echo "sub_category=$(python -c "import os; print(os.getenv('SUB_CATEGORY_OUTPUT', 'Dark Psychology'))")" >> $GITHUB_OUTPUT
+          echo "episode=$(python -c "import os; print(os.getenv('EPISODE_OUTPUT', '1'))")" >> $GITHUB_OUTPUT
+
+      - name: Trigger Main Workflow (Python Method)
+        if: steps.check.outputs.backup_needed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CATEGORY_OUTPUT: ${{ steps.check.outputs.category }}
+          SUB_CATEGORY_OUTPUT: ${{ steps.check.outputs.sub_category }}
+          EPISODE_OUTPUT: ${{ steps.check.outputs.episode }}
+        run: |
+          # Use Python to properly format the JSON payload
+          echo "Creating workflow dispatch payload..."
+          python3 -c "
+          import os, json, re, time, sys
+          
+          # Function to clean values
+          def clean_value(val):
+              if not val:
+                  return ''
+              # Remove any characters that might break JSON
+              val = re.sub(r'[\"\'\\]', '', val)
+              return val.strip()
+          
+          # Get and clean values
+          category = clean_value(os.getenv('CATEGORY_OUTPUT', 'Human Psychology & Behavior'))
+          sub_category = clean_value(os.getenv('SUB_CATEGORY_OUTPUT', 'Dark Psychology'))
+          episode = clean_value(os.getenv('EPISODE_OUTPUT', '1'))
+          
+          # Generate run_id
+          run_id = f\"backup_{int(time.time())}\"
+          
+          # Create the JSON payload
+          payload = {
+              'ref': 'main',
+              'inputs': {
+                  'run_id': run_id,
+                  'main_category': category,
+                  'sub_category': sub_category,
+                  'episode': episode,
+                  'is_retry': 'false',
+                  'attempt': '1'
+              }
+          }
+          
+          # Print for debugging
+          print(f\"Category: {category}\")
+          print(f\"Sub Category: {sub_category}\")
+          print(f\"Episode: {episode}\")
+          print(f\"Run ID: {run_id}\")
+          
+          # Save payload to file
+          with open('/tmp/payload.json', 'w') as f:
+              json.dump(payload, f)
+          
+          print(\"Payload created successfully\")
+          "
+          
+          echo "Triggering workflow..."
+          
+          # Get repository info
+          REPO_FULL_NAME="${{ github.repository }}"
+          
+          # Make the API call
+          curl -X POST \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "Content-Type: application/json" \
+            --data @/tmp/payload.json \
+            "https://api.github.com/repos/$REPO_FULL_NAME/actions/workflows/main.yml/dispatches"
+          
+          echo "Backup workflow triggered successfully!"
+
+      - name: Notify Tier 1 - Backup Status
+        if: always()
+        env:
+          TIER1_WEBHOOK_URL: ${{ secrets.TIER1_WEBHOOK_URL }}
+        run: |
+          python src/video_generation/notify_webhook.py \
+            --action "backup_check" \
+            --run-id "backup_${{ github.run_id }}" \
+            --status "${{ job.status }}" \
+            --backup-needed "${{ steps.check.outputs.backup_needed }}"

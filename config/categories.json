@@ -1,0 +1,229 @@
+{
+  "categories": [
+    {
+      "id": "human-psychology",
+      "name": "Human Psychology & Behavior",
+      "hindi_name": "मानव मनोविज्ञान और व्यवहार",
+      "sub_categories": [
+        {
+          "id": "dark-psychology",
+          "name": "Dark Psychology",
+          "hindi_name": "डार्क साइकोलॉजी"
+        },
+        {
+          "id": "life-hacks",
+          "name": "Life Hacks Psychology",
+          "hindi_name": "लाइफ हैक्स मनोविज्ञान"
+        },
+        {
+          "id": "behavioral",
+          "name": "Behavioral Psychology",
+          "hindi_name": "व्यवहार मनोविज्ञान"
+        },
+        {
+          "id": "body-language",
+          "name": "Body Language Secrets",
+          "hindi_name": "बॉडी लैंग्वेज सीक्रेट्स"
+        }
+      ]
+    },
+    {
+      "id": "hidden-history",
+      "name": "Hidden Historical Truths",
+      "hindi_name": "इतिहास की छुपी सच्चाई",
+      "sub_categories": [
+        {
+          "id": "untold-school",
+          "name": "Untold School History",
+          "hindi_name": "वो सच जो स्कूलों में नहीं पढ़ाए"
+        },
+        {
+          "id": "conspiracies",
+          "name": "Historical Conspiracies",
+          "hindi_name": "ऐतिहासिक षड्यंत्र"
+        },
+        {
+          "id": "real-kings",
+          "name": "Real Stories of Kings",
+          "hindi_name": "राजाओं की असली कहानियां"
+        },
+        {
+          "id": "freedom-struggle",
+          "name": "Unknown Freedom Struggle",
+          "hindi_name": "स्वतंत्रता संग्राम के अनसुने पहलू"
+        }
+      ]
+    },
+    {
+      "id": "politics",
+      "name": "Politics Decoded",
+      "hindi_name": "राजनीति का खेल",
+      "sub_categories": [
+        {
+          "id": "vote-psychology",
+          "name": "Vote Bank Psychology",
+          "hindi_name": "वोट बैंक की साइकोलॉजी"
+        },
+        {
+          "id": "scheme-intent",
+          "name": "Real Intent Behind Schemes",
+          "hindi_name": "स्कीमों का असली मकसद"
+        },
+        {
+          "id": "leader-manipulation",
+          "name": "Leader Manipulation",
+          "hindi_name": "नेताओं की मैनिपुलेशन ट्रिक्स"
+        },
+        {
+          "id": "election-strategies",
+          "name": "Election Strategies",
+          "hindi_name": "चुनावी रणनीतियां"
+        }
+      ]
+    },
+    {
+      "id": "business",
+      "name": "Business Fundamentals",
+      "hindi_name": "बिजनेस की बुनियाद",
+      "sub_categories": [
+        {
+          "id": "mindset",
+          "name": "Businessman Mindset",
+          "hindi_name": "बिजनेसमैन माइंडसेट"
+        },
+        {
+          "id": "systems",
+          "name": "Building Systems",
+          "hindi_name": "सिस्टम बनाना सीखो"
+        },
+        {
+          "id": "money-works",
+          "name": "Money Works For You",
+          "hindi_name": "पैसे काम करें आप नहीं"
+        },
+        {
+          "id": "startup",
+          "name": "Startup Psychology",
+          "hindi_name": "स्टार्टअप साइकोलॉजी"
+        }
+      ]
+    },
+    {
+      "id": "education",
+      "name": "Education System Exposed",
+      "hindi_name": "स्टडी सिस्टम रिव्यू",
+      "sub_categories": [
+        {
+          "id": "old-education",
+          "name": "Why Old Education Fails",
+          "hindi_name": "पुरानी पढ़ाई क्यों फेल है"
+        },
+        {
+          "id": "school-vs-life",
+          "name": "School vs Real Life",
+          "hindi_name": "स्कूल vs रियल लाइफ"
+        },
+        {
+          "id": "real-education",
+          "name": "Real Education for Success",
+          "hindi_name": "सक्सेस की असली पढ़ाई"
+        },
+        {
+          "id": "routine",
+          "name": "Daily Routine Mastery",
+          "hindi_name": "डेली रूटीन मास्टरी"
+        }
+      ]
+    },
+    {
+      "id": "society",
+      "name": "Society Reality",
+      "hindi_name": "समाज का सच",
+      "sub_categories": [
+        {
+          "id": "poverty-cycle",
+          "name": "Cycle of Poverty",
+          "hindi_name": "गरीबी का चक्र"
+        },
+        {
+          "id": "rich-secrets",
+          "name": "Secrets of Rich Society",
+          "hindi_name": "अमीर समाज के रहस्य"
+        },
+        {
+          "id": "social-class",
+          "name": "Social Class Psychology",
+          "hindi_name": "सोशल क्लास साइकोलॉजी"
+        },
+        {
+          "id": "breaking-system",
+          "name": "Breaking the System",
+          "hindi_name": "ब्रेकिंग द सिस्टम"
+        }
+      ]
+    },
+    {
+      "id": "communication",
+      "name": "Communication Mastery",
+      "hindi_name": "कम्युनिकेशन मास्टरी",
+      "sub_categories": [
+        {
+          "id": "presentation",
+          "name": "Presentation Psychology",
+          "hindi_name": "प्रेजेंटेशन साइकोलॉजी"
+        },
+        {
+          "id": "less-education",
+          "name": "Less Education More Impact",
+          "hindi_name": "कम पढ़े लिखे का जादू"
+        },
+        {
+          "id": "speaking",
+          "name": "Art of Speaking",
+          "hindi_name": "बोलने की कला"
+        },
+        {
+          "id": "writing",
+          "name": "Impactful Writing",
+          "hindi_name": "प्रभावशाली लेखन"
+        }
+      ]
+    },
+    {
+      "id": "human-life",
+      "name": "Human Life Reality",
+      "hindi_name": "इंसानी जिंदगी की हकीकत",
+      "sub_categories": [
+        {
+          "id": "success-lies",
+          "name": "Lies About Success",
+          "hindi_name": "सक्सेस का झूठ"
+        },
+        {
+          "id": "relations-market",
+          "name": "Relations Marketplace",
+          "hindi_name": "रिश्तों का बाजार"
+        },
+        {
+          "id": "emotional-manipulation",
+          "name": "Emotional Manipulation",
+          "hindi_name": "भावनाओं की दुकानदारी"
+        },
+        {
+          "id": "real-living",
+          "name": "Real Way of Living",
+          "hindi_name": "जीने का असली तरीका"
+        }
+      ]
+    }
+  ],
+  "settings": {
+    "default_category": "Human Psychology & Behavior",
+    "default_sub_category": "Dark Psychology",
+    "target_duration_minutes": 12,
+    "min_word_count": 1800,
+    "upload_timezone": "Asia/Kolkata",
+    "long_video_publish_time": "17:00",
+    "shorts_publish_time": "17:30"
+  }
+}
