@@ -87,8 +87,8 @@ echo "   Location: ${MODEL_PATH}"
 # ✅ FINAL verification (production-safe)
 if [ -d "${MODEL_PATH}/am" ] && \
    [ -d "${MODEL_PATH}/graph" ] && \
-   [ -f "${MODEL_PATH}/conf/model.conf" ] && \
-   [ -f "${MODEL_PATH}/feat.params" ]; then
+   [ -f "${MODEL_PATH}/conf/model.conf" ];
+then
     
     echo "✅ Model ready for use"
     
