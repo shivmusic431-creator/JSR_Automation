@@ -20,7 +20,7 @@ if [ -d "${MODEL_PATH}" ]; then
     echo "✅ Vosk Hindi model already exists at ${MODEL_PATH}"
     
     # Verify model has required files
-    if [ -f "${MODEL_PATH}/am" ] && [ -f "${MODEL_PATH}/conf/model.conf" ]; then
+    if [ -d "${MODEL_PATH}/am" ] && [ -f "${MODEL_PATH}/conf/model.conf" ]; then
         echo "✅ Model validation passed"
         exit 0
     else
@@ -68,17 +68,33 @@ if [ ! -d "${MODEL_NAME}" ]; then
     exit 1
 fi
 
-# Clean up
+# 🔧 FIX: Handle nested folder issue (very common in Vosk zip)
+if [ -d "${MODEL_NAME}/${MODEL_NAME}" ]; then
+    echo "🔧 Fixing nested folder structure..."
+    mv "${MODEL_NAME}/${MODEL_NAME}"/* "${MODEL_NAME}/"
+    rm -rf "${MODEL_NAME}/${MODEL_NAME}"
+fi
+
+# Clean up zip file
 rm -f "${MODEL_ZIP}"
+
+# Return to root directory
 cd ..
 
 echo "✅ Vosk Hindi model downloaded and extracted successfully"
 echo "   Location: ${MODEL_PATH}"
 
-# Final verification
-if [ -d "${MODEL_PATH}" ] && [ -f "${MODEL_PATH}/am" ]; then
+# ✅ FINAL verification (production-safe)
+if [ -d "${MODEL_PATH}/am" ] && \
+   [ -d "${MODEL_PATH}/graph" ] && \
+   [ -f "${MODEL_PATH}/conf/model.conf" ] && \
+   [ -f "${MODEL_PATH}/feat.params" ]; then
+    
     echo "✅ Model ready for use"
+    
 else
     echo "❌ Model verification failed"
+    echo "Contents of ${MODEL_PATH}:"
+    ls -lah "${MODEL_PATH}" || true
     exit 1
 fi
