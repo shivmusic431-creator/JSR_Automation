@@ -71,20 +71,32 @@ class YouTubeUploader:
             raise
     
     def _get_token_from_firestore(self) -> Dict:
-        """Fetch OAuth token from Firestore"""
+        """Fetch OAuth token from Firestore using channel ID field lookup"""
         try:
-            doc_ref = self.db.collection('youtube_tokens').document(self.channel_id)
-            doc = doc_ref.get()
+            logger.info(f"🔍 Looking up token for channel ID: {self.channel_id}")
             
-            if not doc.exists:
+            docs = (
+                self.db.collection('youtube_tokens')
+                .where('id', '==', self.channel_id)
+                .limit(1)
+                .stream()
+            )
+            
+            doc = next(docs, None)
+            
+            if not doc:
                 raise ValueError(f"No token found for channel: {self.channel_id}")
             
             token_data = doc.to_dict()
-            logger.info(f"✅ Retrieved token for channel: {token_data.get('name', self.channel_id)}")
+            
+            if not token_data.get('accessToken') or not token_data.get('refreshToken'):
+                raise ValueError("Token document exists but missing accessToken or refreshToken")
+            
+            logger.info(f"✅ Token found for channel: {token_data.get('name', self.channel_id)}")
             
             return {
-                'token': token_data.get('accessToken'),
-                'refresh_token': token_data.get('refreshToken'),
+                'token': token_data['accessToken'],
+                'refresh_token': token_data['refreshToken'],
                 'token_uri': 'https://oauth2.googleapis.com/token',
                 'client_id': os.getenv('GOOGLE_CLIENT_ID'),
                 'client_secret': os.getenv('GOOGLE_CLIENT_SECRET'),
@@ -112,12 +124,23 @@ class YouTubeUploader:
     def _update_token_in_firestore(self, credentials: Credentials):
         """Update refreshed token in Firestore"""
         try:
-            doc_ref = self.db.collection('youtube_tokens').document(self.channel_id)
-            doc_ref.update({
-                'accessToken': credentials.token,
-                'updatedAt': firestore.SERVER_TIMESTAMP
-            })
-            logger.info("✅ Token updated in Firestore")
+            # First find the document by channel ID
+            docs = (
+                self.db.collection('youtube_tokens')
+                .where('id', '==', self.channel_id)
+                .limit(1)
+                .stream()
+            )
+            
+            doc = next(docs, None)
+            if doc:
+                doc.reference.update({
+                    'accessToken': credentials.token,
+                    'updatedAt': firestore.SERVER_TIMESTAMP
+                })
+                logger.info("✅ Token updated in Firestore")
+            else:
+                logger.warning(f"⚠️ Could not find document to update token for channel: {self.channel_id}")
         except Exception as e:
             logger.warning(f"⚠️ Failed to update token in Firestore: {e}")
     
