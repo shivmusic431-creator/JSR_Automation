@@ -77,32 +77,32 @@ def find_latest_audio_file(output_dir="output"):
 
 def format_subtitle_style(video_type: str = "long") -> str:
     """
-    Create FFmpeg subtitle filter with center alignment
+    Create FFmpeg subtitle filter with center alignment and Hindi font support
     
     Args:
         video_type: 'long' or 'short'
         
     Returns:
-        FFmpeg subtitle filter string
+        FFmpeg subtitle filter string with Noto Sans Devanagari font for Hindi support
     """
-    # SRT styling parameters
+    # SRT styling parameters with Noto Sans Devanagari for proper Hindi glyph rendering
     # Alignment 10 = center ({\an5} in SRT)
     base_style = (
-        "FontName=Arial,"
-        "FontSize=24,"
-        "PrimaryColour=&H00FFFFFF,"  # White
-        "OutlineColour=&H00000000,"  # Black outline
-        "BorderStyle=3,"              # Outline + shadow
-        "Outline=1,"                   # Outline width
-        "Shadow=1,"                    # Shadow depth
-        "Alignment=10,"                 # Center alignment
-        "MarginV=20"                    # Vertical margin from bottom
+        "FontName=Noto Sans Devanagari,"  # Changed from Arial to support Hindi
+        "FontSize=28,"                     # Slightly larger for better readability
+        "PrimaryColour=&H00FFFFFF,"        # White
+        "OutlineColour=&H00000000,"        # Black outline
+        "BorderStyle=3,"                    # Outline + shadow
+        "Outline=1,"                        # Outline width
+        "Shadow=1,"                         # Shadow depth
+        "Alignment=10,"                      # Center alignment
+        "MarginV=30"                         # Vertical margin from bottom
     )
     
     if video_type == "short":
         # Adjust for vertical video
-        base_style = base_style.replace("FontSize=24", "FontSize=28")
-        base_style = base_style.replace("MarginV=20", "MarginV=30")
+        base_style = base_style.replace("FontSize=28", "FontSize=32")
+        base_style = base_style.replace("MarginV=30", "MarginV=40")
     
     return base_style
 
@@ -187,7 +187,13 @@ def edit_video(video_type: str, script_file: str, audio_file: str, clips_dir: st
         try:
             with open(manifest_file, 'r', encoding='utf-8') as f:
                 manifest = json.load(f)
-                clips = [c['file'] for c in manifest.get('clips', [])]
+                # FIX: Handle both 'filename' and 'file' keys in manifest
+                clips = []
+                for c in manifest.get('clips', []):
+                    if 'filename' in c:
+                        clips.append(c['filename'])
+                    elif 'file' in c:
+                        clips.append(c['file'])
             log(f"📋 Loaded manifest with {len(clips)} clips")
         except Exception as e:
             log(f"⚠️ Error loading manifest: {e}")
@@ -214,16 +220,78 @@ def edit_video(video_type: str, script_file: str, audio_file: str, clips_dir: st
             '-r', '30'
         ]
         
-        # Add subtitles if available
+        # Add video filters
+        video_filters = []
+        
+        # =========================================================
+        # CORRECT FILTER ORDER: SCALE → SUBTITLES → HOOK → CTA
+        # =========================================================
+        
+        # FIRST: Scaling (for shorts)
+        if video_type == 'short':
+            # Proper vertical scaling with padding
+            video_filters.append(
+                "scale=1080:1920:force_original_aspect_ratio=decrease,"
+                "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,"
+                "format=yuv420p"
+            )
+        
+        # SECOND: Subtitles
         if subtitles_file and Path(subtitles_file).exists():
             # Verify center alignment
             verify_subtitle_center_alignment(Path(subtitles_file))
             
             subtitle_style = format_subtitle_style(video_type)
-            cmd.extend([
-                '-vf', f"subtitles={subtitles_file}:force_style='{subtitle_style}'"
-            ])
+            video_filters.append(f"subtitles={subtitles_file}:force_style='{subtitle_style}'")
             log("📝 Adding subtitles to video")
+        
+        # THIRD: Hook overlay (first 3 seconds)
+        if video_type == 'short' and hook_file and Path(hook_file).exists():
+            try:
+                with open(hook_file, 'r', encoding='utf-8') as f:
+                    hook_data = json.load(f)
+                hook = hook_data.get('hook_options', [{}])[0]
+                hook_text = hook.get('text_overlay', '').replace("'", "\\'")
+                if hook_text:
+                    video_filters.append(
+                        f"drawtext=fontfile=/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf:"
+                        f"text='{hook_text}':"
+                        "fontcolor=yellow:"
+                        "fontsize=72:"
+                        "x=(w-text_w)/2:"
+                        "y=h*0.2:"
+                        "enable='between(t,0,3)':"
+                        "borderw=4:bordercolor=black"
+                    )
+                    log(f"🪝 Hook overlay added: {hook_text}")
+            except Exception as e:
+                log(f"⚠️ Hook overlay failed: {e}")
+        
+        # FOURTH: CTA overlay (last 5 seconds)
+        if video_type == 'short' and cta_file and Path(cta_file).exists():
+            try:
+                with open(cta_file, 'r', encoding='utf-8') as f:
+                    cta_data = json.load(f)
+                cta = cta_data.get('cta_options', [{}])[0]
+                cta_text = cta.get('text_overlay', '').replace("'", "\\'")
+                if cta_text:
+                    video_filters.append(
+                        f"drawtext=fontfile=/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf:"
+                        f"text='{cta_text}':"
+                        "fontcolor=white:"
+                        "fontsize=60:"
+                        "x=(w-text_w)/2:"
+                        "y=h*0.8:"
+                        "enable='gte(t,53)':"
+                        "borderw=4:bordercolor=black"
+                    )
+                    log(f"📢 CTA overlay added: {cta_text}")
+            except Exception as e:
+                log(f"⚠️ CTA overlay failed: {e}")
+        
+        # Apply video filters if any
+        if video_filters:
+            cmd.extend(['-vf', ','.join(video_filters)])
         
         cmd.append(str(output_file))
         
@@ -235,8 +303,10 @@ def edit_video(video_type: str, script_file: str, audio_file: str, clips_dir: st
         with open(concat_file, 'w', encoding='utf-8') as f:
             for clip in clips:
                 clip_path = Path(clip)
-                if not clip_path.is_absolute():
-                    clip_path = clips_path / clip_path
+                # FIX: Better path resolution for clip files
+                if not clip_path.exists():
+                    clip_path = clips_path / clip_path.name
+                clip_path = clip_path.resolve()
                 
                 if clip_path.exists():
                     abs_path = str(clip_path.absolute())
@@ -266,7 +336,20 @@ def edit_video(video_type: str, script_file: str, audio_file: str, clips_dir: st
         # Add video filters
         video_filters = []
         
-        # Add subtitles if available
+        # =========================================================
+        # CORRECT FILTER ORDER: SCALE → SUBTITLES → HOOK → CTA
+        # =========================================================
+        
+        # FIRST: Scaling (for shorts)
+        if video_type == 'short':
+            # Proper vertical scaling with padding
+            video_filters.append(
+                "scale=1080:1920:force_original_aspect_ratio=decrease,"
+                "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,"
+                "format=yuv420p"
+            )
+        
+        # SECOND: Subtitles
         if subtitles_file and Path(subtitles_file).exists():
             # Verify center alignment
             verify_subtitle_center_alignment(Path(subtitles_file))
@@ -275,13 +358,53 @@ def edit_video(video_type: str, script_file: str, audio_file: str, clips_dir: st
             video_filters.append(f"subtitles={subtitles_file}:force_style='{subtitle_style}'")
             log("📝 Adding subtitles to video")
         
-        # For shorts, add vertical crop
+        # THIRD: Hook overlay (first 3 seconds)
+        if video_type == 'short' and hook_file and Path(hook_file).exists():
+            try:
+                with open(hook_file, 'r', encoding='utf-8') as f:
+                    hook_data = json.load(f)
+                hook = hook_data.get('hook_options', [{}])[0]
+                hook_text = hook.get('text_overlay', '').replace("'", "\\'")
+                if hook_text:
+                    video_filters.append(
+                        f"drawtext=fontfile=/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf:"
+                        f"text='{hook_text}':"
+                        "fontcolor=yellow:"
+                        "fontsize=72:"
+                        "x=(w-text_w)/2:"
+                        "y=h*0.2:"
+                        "enable='between(t,0,3)':"
+                        "borderw=4:bordercolor=black"
+                    )
+                    log(f"🪝 Hook overlay added: {hook_text}")
+            except Exception as e:
+                log(f"⚠️ Hook overlay failed: {e}")
+        
+        # FOURTH: CTA overlay (last 5 seconds)
+        if video_type == 'short' and cta_file and Path(cta_file).exists():
+            try:
+                with open(cta_file, 'r', encoding='utf-8') as f:
+                    cta_data = json.load(f)
+                cta = cta_data.get('cta_options', [{}])[0]
+                cta_text = cta.get('text_overlay', '').replace("'", "\\'")
+                if cta_text:
+                    video_filters.append(
+                        f"drawtext=fontfile=/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf:"
+                        f"text='{cta_text}':"
+                        "fontcolor=white:"
+                        "fontsize=60:"
+                        "x=(w-text_w)/2:"
+                        "y=h*0.8:"
+                        "enable='gte(t,53)':"
+                        "borderw=4:bordercolor=black"
+                    )
+                    log(f"📢 CTA overlay added: {cta_text}")
+            except Exception as e:
+                log(f"⚠️ CTA overlay failed: {e}")
+        
+        # Hard limit duration to 58 seconds for shorts
         if video_type == 'short':
-            video_filters.append("crop=1080:1920,format=yuv420p")
-            
-            # Add duration limit
-            if target_duration:
-                cmd.extend(['-t', str(target_duration)])
+            cmd.extend(['-t', '58'])
         
         # Apply video filters if any
         if video_filters:
@@ -353,6 +476,9 @@ def edit_video(video_type: str, script_file: str, audio_file: str, clips_dir: st
                         'file_size_mb': size_mb,
                         'subtitles_included': subtitles_file and Path(subtitles_file).exists(),
                         'subtitles_center_aligned': True,
+                        'subtitles_font': 'Noto Sans Devanagari',  # Added font info
+                        'hook_included': hook_file and Path(hook_file).exists() and video_type == 'short',
+                        'cta_included': cta_file and Path(cta_file).exists() and video_type == 'short',
                         'audio_file': audio_file,
                         'clips_used': len(clips) if clips else 0,
                         'output_file': str(output_file)

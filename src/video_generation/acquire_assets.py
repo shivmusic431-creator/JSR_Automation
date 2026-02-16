@@ -372,6 +372,11 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
                 break
     
     target_duration = get_audio_duration(audio_file)
+    
+    # FIX: Limit Shorts duration to 58 seconds
+    if video_type == 'short':
+        target_duration = min(target_duration, 58)
+    
     log(f"🎯 Target duration: {target_duration:.2f}s ({target_duration/60:.2f}m)")
     
     # Step 2: Initialize Firebase
@@ -464,16 +469,16 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
                     # Mark as used in Firebase
                     firebase.mark_clip_used(video_id, duration)
                     
-                    # Update tracking
-                    downloaded_duration += duration
+                    # Update tracking - FIX: Include both 'filename' and 'file' keys
                     downloaded_clips.append({
                         'clip_id': video_id,
                         'filename': filename,
+                        'file': str(output_path.absolute()),  # Add absolute path
                         'duration': duration,
                         'query': query,
                         'url': url
                     })
-                    
+                    downloaded_duration += duration
                     found_any = True
                     
                     log(f"✅ Added: {filename} ({duration:.1f}s)")

@@ -45,7 +45,7 @@ def generate_thumbnail(script_file, run_id):
     
     try:
         # FastSD CPU path resolution - absolute path for reliability
-        fastsdcpu_path = Path.cwd() / "fastsdcpu" / "fastsdcpu.py"
+        fastsdcpu_path = Path.cwd() / "fastsdcpu" / "src" / "app.py"
         
         if not fastsdcpu_path.exists():
             print(f"❌ ERROR: FastSD CPU not found at {fastsdcpu_path}")
