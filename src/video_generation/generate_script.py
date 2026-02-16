@@ -9,6 +9,7 @@ FIXES:
 - Truncation detection and recovery
 - Streaming support for large responses
 - Optimized for Coqui XTTS Hindi voice generation
+- Emotion indicators strictly on separate lines for XTTS metadata
 """
 import os
 import json
@@ -241,20 +242,20 @@ Use emotional reaction indicators in brackets ONLY:
 (गुस्से में)
 (प्यार से)
 
-**EMOTION PLACEMENT RULE:**
+**EMOTION PLACEMENT RULE (CRITICAL):**
 
-Emotional indicators must ALWAYS be placed BEFORE the sentence.
+Emotion indicators must ALWAYS be placed on a separate line before narration. They are metadata for voice tone and must never be merged with narration text.
 
-Correct format:
+CORRECT format:
 
-(धीरे से)
-तुम्हें यह समझना होगा...
+(गंभीर स्वर में)
+तुम्हें सच जानना होगा।
 
-Wrong format:
+WRONG format:
 
-तुम्हें यह समझना होगा... (धीरे से)
+(गंभीर स्वर में) तुम्हें सच जानना होगा।
 
-This ensures correct XTTS emotional voice synthesis.
+This ensures XTTS uses emotional context but never speaks the emotion words.
 
 Use natural pauses using punctuation:
 - ,  for short pauses
@@ -363,7 +364,7 @@ The JSON MUST have this exact structure:
 **ENSURE THE JSON IS COMPLETE AND VALID. DO NOT TRUNCATE ANY SECTION.**
 **REMEMBER: Pure Hindi (देवनागरी लिपि), NOT Hinglish**
 **REMEMBER: Use emotional indicators (गंभीर स्वर में) NOT [PAUSE] markers**
-**REMEMBER: Emotional indicators must be placed BEFORE the sentence**
+**REMEMBER: Emotional indicators must be placed on a separate line BEFORE the sentence**
 **REMEMBER: Scene markers must be on separate lines, NOT spoken**"""
     
     return prompt
