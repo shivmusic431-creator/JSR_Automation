@@ -5,7 +5,7 @@ Production-grade pause-aware, resumable audio generation system
 
 Features:
 - Intelligent pause-aware chunking (~2 min chunks)
-- XTTS v2-safe micro-segmentation
+- XTTS v2-safe micro-segmentation (FIXED: 600 chars max per segment)
 - Resume-safe persistent session state
 - Automatic retry logic (3 attempts per chunk)
 - CLI modes: generate, resume, stitch, status, chunk-id
@@ -106,8 +106,10 @@ MIN_CHUNK_DURATION = 90      # Lowered from 100 for more flexibility
 MAX_CHUNK_DURATION = 150     # HARD CAP - NEVER EXCEED
 WORDS_PER_MINUTE = 150       # Average speaking rate for Hindi
 
-# FIX 2: Increased micro-segment size to reduce fragmentation and prevent cracked voice
-XTTS_MICRO_SEGMENT_CHARS = 1200  # Increased from 500 for smoother audio
+# FIX 2: REDUCED micro-segment size to 600 chars to prevent XTTS token limit crash
+# XTTS v2 has a hard limit of 400 tokens per generation
+# 600 characters is a safe upper bound that respects this limit
+XTTS_MICRO_SEGMENT_CHARS = 600  # REDUCED FROM 1200 TO PREVENT TOKEN LIMIT CRASH
 MAX_RETRIES = 3
 
 # XTTS Configuration
@@ -802,6 +804,7 @@ class XTTSAudioGenerator:
     - Memory cleanup after each chunk
     - FIX 3: Always uses voice cloning with my_voice.wav
     - FIX 4: Applies audio smoothing to prevent cracking
+    - FIXED: Micro-segments now capped at 600 chars (was 1200) to prevent XTTS token limit crash
     """
     
     def __init__(self, voice_preset: str = 'hi'):
@@ -896,6 +899,9 @@ class XTTSAudioGenerator:
         """
         Generate audio with continuous heartbeat logging
         
+        FIXED: Split into smaller micro-segments (600 chars max) to prevent XTTS token limit crash
+        Uses sentence boundary detection (। ? !) to split naturally
+        
         Args:
             text: Clean text to synthesize
             chunk_id: Chunk identifier
@@ -903,9 +909,9 @@ class XTTSAudioGenerator:
         Returns:
             Audio array or None
         """
-        # FIX 2: Split into larger micro-segments (1200 chars) to reduce fragmentation
+        # FIX 2: Split into smaller micro-segments (600 chars max) to prevent XTTS token limit crash
         segments = self._split_into_micro_segments(text)
-        log(f"📝 Split into {len(segments)} micro-segments (FIX 2: {XTTS_MICRO_SEGMENT_CHARS} chars each)")
+        log(f"📝 Split into {len(segments)} micro-segments (FIX 2: {XTTS_MICRO_SEGMENT_CHARS} chars max each)")
         
         self.heartbeat.start(f"Generating chunk {chunk_id} (0/{len(segments)} segments)")
         
@@ -1012,14 +1018,22 @@ class XTTSAudioGenerator:
         """
         Split text into XTTS-safe micro-segments
         
-        FIX 2: Increased segment size to 1200 chars for smoother audio
+        FIX 2: Reduced segment size to 600 chars max (was 1200) to prevent XTTS token limit crash
+        Splits at sentence boundaries (। ? !) to maintain natural speech flow
+        
+        XTTS v2 has a hard limit of 400 tokens per generation
+        600 characters is a safe upper bound that respects this limit
         
         Args:
             text: Text to split
             
         Returns:
-            List of segments
+            List of segments (each <= 600 chars)
         """
+        # Split on Hindi/Devanagari sentence boundaries
+        # । - Hindi danda (full stop)
+        # ? - question mark
+        # ! - exclamation mark
         sentences = re.split(r'([।?!]+)', text)
         segments = []
         current_segment = ""
@@ -1029,6 +1043,7 @@ class XTTSAudioGenerator:
             delimiter = sentences[i+1] if i+1 < len(sentences) else ""
             full_sentence = sentence + delimiter
             
+            # If adding this sentence would exceed the limit, finalize current segment
             if len(current_segment) + len(full_sentence) > XTTS_MICRO_SEGMENT_CHARS:
                 if current_segment:
                     segments.append(current_segment.strip())
@@ -1036,10 +1051,23 @@ class XTTSAudioGenerator:
             else:
                 current_segment += full_sentence
         
+        # Add any remaining text
         if current_segment.strip():
             segments.append(current_segment.strip())
         
-        return segments
+        # Safety check: if any segment still exceeds limit, do a hard character split as last resort
+        # This should rarely happen, but protects against extremely long sentences without punctuation
+        final_segments = []
+        for segment in segments:
+            if len(segment) <= XTTS_MICRO_SEGMENT_CHARS:
+                final_segments.append(segment)
+            else:
+                # Hard split by characters as absolute last resort
+                log(f"  ⚠️ Segment exceeds {XTTS_MICRO_SEGMENT_CHARS} chars, performing hard split")
+                for i in range(0, len(segment), XTTS_MICRO_SEGMENT_CHARS):
+                    final_segments.append(segment[i:i + XTTS_MICRO_SEGMENT_CHARS])
+        
+        return final_segments
 
 
 # ============================================================================
