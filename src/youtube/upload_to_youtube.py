@@ -76,8 +76,8 @@ class YouTubeUploader:
             logger.info(f"🔍 Looking up token for channel ID: {self.channel_id}")
             
             docs = (
-                self.db.collection('youtube_tokens')
-                .where('id', '==', self.channel_id)
+                self.db.collection('userTokens')
+                .where('channelId', '==', self.channel_id)
                 .limit(1)
                 .stream()
             )
@@ -126,8 +126,8 @@ class YouTubeUploader:
         try:
             # First find the document by channel ID
             docs = (
-                self.db.collection('youtube_tokens')
-                .where('id', '==', self.channel_id)
+                self.db.collection('userTokens')
+                .where('channelId', '==', self.channel_id)
                 .limit(1)
                 .stream()
             )
