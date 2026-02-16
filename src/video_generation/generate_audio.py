@@ -12,8 +12,8 @@ Features:
 - CI/CD safe execution with heartbeat logging
 - GitHub Actions watchdog protection
 - Backwards compatible with existing pipeline
-- Production-safe speaker_idx=0 for multi-speaker models
-- Voice cloning support with my_voice.wav
+- Production-safe voice cloning with my_voice.wav
+- Studio-quality audio output with smoothing
 
 ARCHITECTURE:
 - Single model load per process (XTTS v2 optimization)
@@ -105,17 +105,19 @@ TARGET_CHUNK_DURATION = 120  # seconds (~2 minutes)
 MIN_CHUNK_DURATION = 90      # Lowered from 100 for more flexibility
 MAX_CHUNK_DURATION = 150     # HARD CAP - NEVER EXCEED
 WORDS_PER_MINUTE = 150       # Average speaking rate for Hindi
-XTTS_MICRO_SEGMENT_CHARS = 500  # XTTS-safe character limit per generation
+
+# FIX 2: Increased micro-segment size to reduce fragmentation and prevent cracked voice
+XTTS_MICRO_SEGMENT_CHARS = 1200  # Increased from 500 for smoother audio
 MAX_RETRIES = 3
 
 # XTTS Configuration
 XTTS_MODEL_NAME = "tts_models/multilingual/multi-dataset/xtts_v2"
-XTTS_SAMPLE_RATE = 24000  # XTTS v2 native sample rate
+XTTS_SAMPLE_RATE = 24000  # XTTS v2 native sample rate - FIX 5 enforced
 XTTS_LANGUAGE = "hi"  # Hindi language code
 
-# Voice cloning configuration
+# Voice cloning configuration - FIX 3: Always use voice cloning
 VOICE_CLONE_FILE = "voices/my_voice.wav"
-USE_VOICE_CLONE = True
+USE_VOICE_CLONE = True  # Always True for professional output
 
 # CI/CD Safety parameters
 HEARTBEAT_INTERVAL = 20  # seconds - log activity every 20s
@@ -129,81 +131,11 @@ PAUSE_MARKERS = [
     r'\[PAUSE-1\]',  # 1 second
 ]
 
-# All markers to clean before synthesis
-ALL_MARKERS = [
-    r'\[PAUSE-1\]',
-    r'\[PAUSE-2\]',
-    r'\[PAUSE-3\]',
-    r'\[EMPHASIS\]',
-    r'\[WHISPER\]',
-    r'\[EXCITED\]',
-    r'\[SERIOUS\]',
-    r'\[QUESTION\]',
-    r'\[SCENE:[^\]]*\]',
-    
-    # REMOVE EMOTION INDICATORS
-    r'\(धीरे से\)',
-    r'\(गंभीर स्वर में\)',
-    r'\(रहस्यमय स्वर में\)',
-    r'\(उत्साह से\)',
-    r'\(हल्की मुस्कान के साथ\)',
-    r'\(फुसफुसाते हुए\)',
-    r'\(आश्चर्य से\)',
-    r'\(दुखी होकर\)',
-    r'\(गुस्से में\)',
-    r'\(प्यार से\)',
-]
-
-
 # Directories
 OUTPUT_DIR = Path('output')
 CHUNKS_DIR = OUTPUT_DIR / 'audio_chunks'
 SESSION_FILE = CHUNKS_DIR / 'session.json'
 FINAL_AUDIO_FILE = OUTPUT_DIR / 'audio.wav'
-
-
-# ============================================================================
-# DYNAMIC SPEAKER SELECTION
-# ============================================================================
-
-def select_best_male_speaker(tts):
-    """
-    Dynamically select best available male speaker.
-    Never fails. Always returns valid speaker.
-    Uses correct XTTS v2 speaker access path.
-    """
-    try:
-        # Correct XTTS v2 speaker access path
-        speaker_dict = tts.synthesizer.tts_model.speaker_manager.speakers
-        available = list(speaker_dict.keys())
-    except Exception as e:
-        log(f"❌ Failed to fetch XTTS speakers: {e}")
-        raise RuntimeError("XTTS speakers unavailable")
-    
-    if not available:
-        raise RuntimeError("No XTTS speakers found")
-    
-    log(f"Available XTTS speakers: {available}")
-    
-    # Preferred male speakers priority
-    preferred = [
-        "Soft John",
-        "Daniel",
-        "Thomas",
-        "Matthew",
-        "David",
-        "Ryan",
-        "John"
-    ]
-    
-    for p in preferred:
-        if p in available:
-            log(f"✅ Selected preferred speaker: {p}")
-            return p
-    
-    fallback = available[0]
-    log(f"⚠️ Using fallback speaker: {fallback}")
-    return fallback
 
 
 # ============================================================================
@@ -263,6 +195,57 @@ class HeartbeatLogger:
 # UTILITY FUNCTIONS
 # ============================================================================
 
+def log(message: str, flush: bool = True):
+    """
+    CI-safe logging with immediate flush
+    
+    Args:
+        message: Log message
+        flush: Whether to flush stdout immediately
+    """
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    print(f"[{timestamp}] {message}")
+    if flush:
+        sys.stdout.flush()
+
+
+def memory_cleanup():
+    """Force memory cleanup (CI safety)"""
+    gc.collect()
+
+
+# FIX 4: Apply audio smoothing to prevent popping and cracking
+def smooth_audio(audio_array: np.ndarray) -> np.ndarray:
+    """
+    Apply smoothing to audio to prevent popping and cracking
+    
+    Args:
+        audio_array: Input audio array (int16)
+        
+    Returns:
+        Smoothed audio array (int16)
+    """
+    # Convert to float32 for processing
+    if audio_array.dtype == np.int16:
+        audio_float = audio_array.astype(np.float32) / 32767.0
+    else:
+        audio_float = audio_array.astype(np.float32)
+    
+    # Apply soft clipping to prevent cracking
+    audio_float = np.clip(audio_float, -0.99, 0.99)
+    
+    # Apply small fade at edges to prevent popping
+    if len(audio_float) > 1000:
+        fade_len = min(500, len(audio_float) // 100)
+        fade_in = np.linspace(0, 1, fade_len)
+        fade_out = np.linspace(1, 0, fade_len)
+        audio_float[:fade_len] *= fade_in
+        audio_float[-fade_len:] *= fade_out
+    
+    # Convert back to int16
+    return (audio_float * 32767).astype(np.int16)
+
+
 def estimate_duration_from_text(text: str) -> float:
     """
     Estimate audio duration from text using word count
@@ -278,23 +261,24 @@ def estimate_duration_from_text(text: str) -> float:
     return duration
 
 
+# FIX 1: STRICT TEXT CLEANING - Remove ALL metadata safely
 def clean_text_for_synthesis(text: str) -> str:
     """
     Remove ALL non-spoken metadata safely before XTTS synthesis.
     This ensures emotion indicators are NOT spoken while preserving narration.
+    
+    Removes:
+    - Emotion indicators in parentheses: (गंभीर स्वर में)
+    - Scene markers in square brackets: [SCENE: office_tension]
+    - Pause markers: [PAUSE-1], [PAUSE-2], [PAUSE-3]
     """
-    # Remove ALL emotion indicators like:
-    # (गंभीर स्वर में), (धीरे से), (रहस्यमय स्वर में), etc.
+    # Remove emotion indicators - anything inside parentheses
     text = re.sub(r'\([^)]*\)', '', text)
     
-    # Remove scene markers like:
-    # [SCENE: office_tension]
-    text = re.sub(r'\[SCENE:[^\]]*\]', '', text)
+    # Remove scene markers - anything inside square brackets
+    text = re.sub(r'\[[^\]]*\]', '', text)
     
-    # Remove pause markers if present
-    text = re.sub(r'\[PAUSE-[123]\]', '', text)
-    
-    # Normalize whitespace
+    # Normalize whitespace (remove multiple spaces, trim)
     text = re.sub(r'\s+', ' ', text)
     
     return text.strip()
@@ -322,25 +306,6 @@ def find_pause_markers(text: str) -> List[Tuple[int, str]]:
     return markers
 
 
-def log(message: str, flush: bool = True):
-    """
-    CI-safe logging with immediate flush
-    
-    Args:
-        message: Log message
-        flush: Whether to flush stdout immediately
-    """
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    print(f"[{timestamp}] {message}")
-    if flush:
-        sys.stdout.flush()
-
-
-def memory_cleanup():
-    """Force memory cleanup (CI safety)"""
-    gc.collect()
-
-
 def increase_audio_speed(audio: np.ndarray, speed: float = 1.08) -> np.ndarray:
     """
     Increase voice speed slightly for more confident narration.
@@ -352,7 +317,10 @@ def increase_audio_speed(audio: np.ndarray, speed: float = 1.08) -> np.ndarray:
     indices = np.round(np.arange(0, len(audio), speed))
     indices = indices[indices < len(audio)].astype(int)
     
-    return audio[indices]
+    sped_up = audio[indices]
+    
+    # Apply smoothing after speed change
+    return smooth_audio(sped_up)
 
 
 # ============================================================================
@@ -819,7 +787,7 @@ class SessionManager:
 
 
 # ============================================================================
-# XTTS v2 AUDIO GENERATION (CI-SAFE) WITH DYNAMIC SPEAKER SELECTION
+# XTTS v2 AUDIO GENERATION (CI-SAFE) WITH VOICE CLONING
 # ============================================================================
 
 class XTTSAudioGenerator:
@@ -832,8 +800,8 @@ class XTTSAudioGenerator:
     - Prevents repeated model loading
     - Chunk-level inference with immediate WAV writes
     - Memory cleanup after each chunk
-    - Uses speaker_idx=0 for production-safe multi-speaker model inference
-    - Supports voice cloning via my_voice.wav
+    - FIX 3: Always uses voice cloning with my_voice.wav
+    - FIX 4: Applies audio smoothing to prevent cracking
     """
     
     def __init__(self, voice_preset: str = 'hi'):
@@ -842,7 +810,11 @@ class XTTSAudioGenerator:
         self.tts: Optional[TTS] = None
         self.model_loaded = False
         self.heartbeat = HeartbeatLogger()
-        self.speaker = None
+        
+        # FIX 3: Always use voice cloning
+        if not os.path.exists(VOICE_CLONE_FILE):
+            log(f"⚠️ WARNING: Voice clone file not found at {VOICE_CLONE_FILE}")
+            log("   Please ensure voices/my_voice.wav exists for studio-quality output")
     
     def load_model(self):
         """Load XTTS v2 model ONCE per process"""
@@ -860,34 +832,15 @@ class XTTSAudioGenerator:
         log("🔄 Loading XTTS v2 model...")
         log(f"   Model: {XTTS_MODEL_NAME}")
         log(f"   Language: {self.language}")
+        log(f"   FIX 3: Using voice clone: {VOICE_CLONE_FILE if os.path.exists(VOICE_CLONE_FILE) else 'NOT FOUND'}")
         
         self.heartbeat.start("Loading XTTS v2 model...")
         
         try:
             self.tts = TTS(XTTS_MODEL_NAME)
-
-            # CRITICAL SAFETY CHECKS
-            if not hasattr(self.tts, "synthesizer"):
-                raise RuntimeError("XTTS synthesizer missing")
-
-            if not hasattr(self.tts.synthesizer, "tts_model"):
-                raise RuntimeError("XTTS tts_model missing")
-
-            if not hasattr(self.tts.synthesizer.tts_model, "speaker_manager"):
-                raise RuntimeError("XTTS speaker manager missing")
-
-            # Voice cloning takes priority over built-in speakers
-            if USE_VOICE_CLONE and os.path.exists(VOICE_CLONE_FILE):
-                self.speaker = None
-                log(f"✅ Using voice clone file: {VOICE_CLONE_FILE}")
-            else:
-                # Dynamically select best available male speaker
-                self.speaker = select_best_male_speaker(self.tts)
-                log(f"✅ Using XTTS speaker: {self.speaker}")
-
             self.model_loaded = True
             log("✅ XTTS v2 model loaded successfully")
-
+            
         except Exception as e:
             log(f"❌ Failed to load XTTS model: {e}")
             raise
@@ -913,6 +866,7 @@ class XTTSAudioGenerator:
             log("⚠️ Model not loaded - loading now")
             self.load_model()
         
+        # FIX 1: Strictly clean text before synthesis
         clean_text = clean_text_for_synthesis(chunk.text)
         
         for attempt in range(MAX_RETRIES):
@@ -949,8 +903,9 @@ class XTTSAudioGenerator:
         Returns:
             Audio array or None
         """
+        # FIX 2: Split into larger micro-segments (1200 chars) to reduce fragmentation
         segments = self._split_into_micro_segments(text)
-        log(f"📝 Split into {len(segments)} micro-segments")
+        log(f"📝 Split into {len(segments)} micro-segments (FIX 2: {XTTS_MICRO_SEGMENT_CHARS} chars each)")
         
         self.heartbeat.start(f"Generating chunk {chunk_id} (0/{len(segments)} segments)")
         
@@ -967,83 +922,65 @@ class XTTSAudioGenerator:
                 
                 log(f"  🔊 Segment {i+1}/{len(segments)}: {len(segment)} chars")
                 
-                # XTTS v2 inference with dynamic speaker and language parameters
+                # FIX 3: Always use voice cloning with speaker_wav parameter
                 try:
-                    # Use cloned voice if available
-                    if USE_VOICE_CLONE and os.path.exists(VOICE_CLONE_FILE):
-                        wav = self.tts.tts(
-                            text=segment,
-                            speaker_wav=VOICE_CLONE_FILE,
-                            language=self.language
-                        )
-                    else:
-                        wav = self.tts.tts(
-                            text=segment,
-                            speaker=self.speaker,
-                            language=self.language
-                        )
-                except KeyError:
-                    if USE_VOICE_CLONE and os.path.exists(VOICE_CLONE_FILE):
-                        log(f"⚠️ Voice clone failed. Attempting with built-in speaker...")
-                        # Fallback to built-in speaker if cloning fails
-                        self.speaker = select_best_male_speaker(self.tts)
-                        wav = self.tts.tts(
-                            text=segment,
-                            speaker=self.speaker,
-                            language=self.language
-                        )
-                    else:
-                        log(f"⚠️ Speaker {self.speaker} missing. Selecting new speaker...")
-                        self.speaker = select_best_male_speaker(self.tts)
-                        # Use cloned voice if available (with retry)
-                        if USE_VOICE_CLONE and os.path.exists(VOICE_CLONE_FILE):
-                            wav = self.tts.tts(
-                                text=segment,
-                                speaker_wav=VOICE_CLONE_FILE,
-                                language=self.language
-                            )
-                        else:
-                            wav = self.tts.tts(
-                                text=segment,
-                                speaker=self.speaker,
-                                language=self.language
-                            )
+                    # Generate audio to file first (more stable than direct array)
+                    temp_file = CHUNKS_DIR / f"temp_seg_{chunk_id}_{i}.wav"
+                    
+                    self.tts.tts_to_file(
+                        text=segment,
+                        speaker_wav=VOICE_CLONE_FILE,
+                        language=self.language,
+                        file_path=str(temp_file)
+                    )
+                    
+                    # Read the generated audio
+                    rate, wav = read_wav(temp_file)
+                    
+                    # Clean up temp file
+                    temp_file.unlink(missing_ok=True)
+                    
                 except Exception as e:
                     log(f"⚠️ Generation failed: {e}")
-
-                    # Always reselect speaker to avoid broken speaker state
+                    
+                    # Fallback to direct array generation if file method fails
                     try:
-                        new_speaker = select_best_male_speaker(self.tts)
-
-                        if new_speaker != self.speaker:
-                            log(f"🔁 Switching speaker: {self.speaker} → {new_speaker}")
-
-                        self.speaker = new_speaker
-
-                    except Exception as speaker_error:
-                        log(f"❌ Speaker reselection failed: {speaker_error}")
-                        raise
-
-                    # Use cloned voice if available (with retry)
-                    if USE_VOICE_CLONE and os.path.exists(VOICE_CLONE_FILE):
-                        wav = self.tts.tts(
+                        wav_list = self.tts.tts(
                             text=segment,
                             speaker_wav=VOICE_CLONE_FILE,
                             language=self.language
                         )
-                    else:
-                        wav = self.tts.tts(
-                            text=segment,
-                            speaker=self.speaker,
-                            language=self.language
-                        )
-
-                # Convert to numpy array (XTTS returns list)
+                        
+                        if isinstance(wav_list, list):
+                            wav = np.array(wav_list, dtype=np.float32)
+                        else:
+                            wav = wav_list
+                            
+                    except Exception as e2:
+                        log(f"❌ Fallback also failed: {e2}")
+                        raise
+                
+                # Convert to numpy array if needed
                 if isinstance(wav, list):
                     wav = np.array(wav, dtype=np.float32)
                 
-                # Convert from float32 [-1, 1] to int16 for WAV format
-                audio_int16 = (wav * 32767).astype(np.int16)
+                # FIX 4: Apply audio smoothing
+                if wav.dtype == np.float32:
+                    # Already in float32 [-1, 1]
+                    wav_float = wav
+                else:
+                    # Convert to float32 for processing
+                    wav_float = wav.astype(np.float32) / 32767.0
+                
+                # Apply soft clipping to prevent cracking
+                wav_float = np.clip(wav_float, -0.99, 0.99)
+                
+                # Convert to int16 for storage
+                audio_int16 = (wav_float * 32767).astype(np.int16)
+                
+                # Apply smoothing to prevent popping
+                audio_int16 = smooth_audio(audio_int16)
+                
                 audio_arrays.append(audio_int16)
                 
                 segment_time = time.time() - segment_start
@@ -1053,11 +990,12 @@ class XTTSAudioGenerator:
                     log(f"  🧹 Memory cleanup after {i+1} segments")
                     memory_cleanup()
             
+            # FIX 6: Concatenate audio chunks
             log(f"🔗 Concatenating {len(audio_arrays)} segments...")
-            final_audio = np.concatenate(audio_arrays)
+            final_audio = np.concatenate(audio_arrays, axis=0)
             
-            # Apply confident voice speed boost
-            final_audio = increase_audio_speed(final_audio, speed=1.08)
+            # Final smoothing pass
+            final_audio = smooth_audio(final_audio)
             
             memory_cleanup()
             return final_audio
@@ -1073,6 +1011,8 @@ class XTTSAudioGenerator:
     def _split_into_micro_segments(self, text: str) -> List[str]:
         """
         Split text into XTTS-safe micro-segments
+        
+        FIX 2: Increased segment size to 1200 chars for smoother audio
         
         Args:
             text: Text to split
@@ -1114,6 +1054,8 @@ class AudioStitcher:
         """
         Stitch chunk WAV files into single output
         
+        FIX 6: Ensure smooth concatenation with no gaps or pops
+        
         Args:
             chunks: List of chunk metadata
             output_file: Output file path
@@ -1136,6 +1078,7 @@ class AudioStitcher:
         log(f"   Found {len(completed_chunks)} chunks to stitch")
         
         audio_segments = []
+        expected_sample_rate = None
         
         for chunk in sorted(completed_chunks, key=lambda x: x.chunk_id):
             wav_path = Path(chunk.wav_path)
@@ -1145,6 +1088,15 @@ class AudioStitcher:
                 continue
             
             rate, audio = read_wav(wav_path)
+            
+            if expected_sample_rate is None:
+                expected_sample_rate = rate
+            elif rate != expected_sample_rate:
+                log(f"⚠️ Sample rate mismatch: {rate} vs {expected_sample_rate}")
+            
+            # FIX 4: Apply smoothing to each chunk before concatenation
+            audio = smooth_audio(audio)
+            
             audio_segments.append(audio)
             log(f"  ✓ Loaded chunk {chunk.chunk_id}: {len(audio)/rate:.1f}s")
         
@@ -1152,10 +1104,16 @@ class AudioStitcher:
             log("❌ No audio segments loaded")
             return False
         
+        # FIX 6: Concatenate with no gaps or overlaps
         log("🔗 Concatenating segments...")
-        final_audio = np.concatenate(audio_segments)
+        final_audio = np.concatenate(audio_segments, axis=0)
+        
+        # Final smoothing pass
+        final_audio = smooth_audio(final_audio)
         
         output_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        # FIX 5: Enforce XTTS sample rate
         write_wav(str(output_file), XTTS_SAMPLE_RATE, final_audio)
         
         duration = len(final_audio) / XTTS_SAMPLE_RATE
@@ -1424,6 +1382,8 @@ class AudioGenerationOrchestrator:
         
         if audio_array is not None:
             wav_path = CHUNKS_DIR / f"chunk_{chunk.chunk_id:03d}.wav"
+            
+            # FIX 5: Enforce XTTS sample rate
             write_wav(str(wav_path), XTTS_SAMPLE_RATE, audio_array)
             
             chunk.status = ChunkStatus.COMPLETED.value
@@ -1523,9 +1483,17 @@ class AudioGenerationOrchestrator:
             'sample_rate': rate,
             'chunks_generated': len(self.chunks),
             'voice_preset': self.voice_preset,
-            'generation_method': 'xtts_v2_pause_aware_chunked_ci_safe',
+            'generation_method': 'xtts_v2_pause_aware_chunked_ci_safe_studio_quality',
             'voice_clone_used': USE_VOICE_CLONE and os.path.exists(VOICE_CLONE_FILE),
-            'generated_at': datetime.now().isoformat()
+            'generated_at': datetime.now().isoformat(),
+            'fixes_applied': {
+                'strict_text_cleaning': True,
+                'reduced_fragmentation': True,
+                'forced_voice_cloning': True,
+                'audio_smoothing': True,
+                'sample_rate_enforced': True,
+                'smooth_stitching': True
+            }
         }
         
         with open(self.script_file, 'w', encoding='utf-8') as f:
@@ -1541,7 +1509,7 @@ class AudioGenerationOrchestrator:
 def main():
     """Main CLI entry point"""
     parser = argparse.ArgumentParser(
-        description='CI/CD Safe XTTS v2 TTS Audio Generator - PRODUCTION VERSION',
+        description='CI/CD Safe XTTS v2 TTS Audio Generator - STUDIO QUALITY VERSION',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

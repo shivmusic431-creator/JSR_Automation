@@ -4,6 +4,8 @@ Production-Grade Subtitle Generation for YT-AutoPilot
 Uses Vosk Hindi Model (vosk-model-hi-0.22) for high-accuracy Hindi speech recognition
 
 Features:
+- REAL-TIME WORD-LEVEL SUBTITLES - Words appear in sync with speech
+- Professional grouping: 2-4 words per subtitle for natural reading
 - Streaming processing for long videos (30+ minutes)
 - Center-aligned subtitles with {\an5} formatting
 - Memory-efficient chunked processing
@@ -109,12 +111,81 @@ OUTPUT_SRT = Path("output/subtitles.srt")
 TEMP_WAV = Path("output/temp_audio_16k_mono.wav")
 
 # Processing parameters
-CHUNK_SIZE = 4000  # Process in 4-second chunks for memory efficiency
+CHUNK_SIZE = 2000  # Process in 4-second chunks for memory efficiency
 SAMPLE_RATE = 16000  # Vosk requires 16kHz mono
 HEARTBEAT_INTERVAL = 10  # Log progress every 10 seconds
 
 # Subtitle formatting
 CENTER_ALIGN = "{\\an5}"  # Center alignment for SRT
+
+# ============================================================================
+# WORD-LEVEL SUBTITLE GROUPING
+# ============================================================================
+
+def group_words_into_subtitles(words: List[Dict], words_per_group: int = 3) -> List[Dict]:
+    """
+    Group words into natural subtitle chunks for real-time appearance
+    
+    Args:
+        words: List of word objects with 'word', 'start', 'end'
+        words_per_group: Number of words per subtitle (2-4 for optimal reading)
+        
+    Returns:
+        List of subtitle dictionaries with 'text', 'start', 'end'
+    """
+    if not words:
+        return []
+    
+    subtitles = []
+    
+    # Process words in groups
+    for i in range(0, len(words), words_per_group):
+        group = words[i:i + words_per_group]
+        
+        # Skip empty groups
+        if not group:
+            continue
+        
+        # Combine words into text
+        text = ' '.join([w['word'] for w in group])
+        
+        # Get timing from first and last word in group
+        start = group[0]['start']
+        end = group[-1]['end']
+        
+        # Ensure minimum duration for very short groups
+        if end - start < 0.5 and len(group) == 1:
+            # Single word - ensure it's visible long enough
+            end = start + 0.8
+        
+        subtitles.append({
+            'text': text,
+            'start': start,
+            'end': end
+        })
+    
+    # Merge very short subsequent subtitles if needed
+    merged_subtitles = []
+    i = 0
+    while i < len(subtitles):
+        current = subtitles[i]
+        
+        # Check if next subtitle starts very close to current end
+        if i < len(subtitles) - 1 and subtitles[i + 1]['start'] - current['end'] < 0.1:
+            # Merge with next subtitle
+            next_sub = subtitles[i + 1]
+            merged = {
+                'text': f"{current['text']} {next_sub['text']}",
+                'start': current['start'],
+                'end': next_sub['end']
+            }
+            merged_subtitles.append(merged)
+            i += 2  # Skip next subtitle
+        else:
+            merged_subtitles.append(current)
+            i += 1
+    
+    return merged_subtitles
 
 # ============================================================================
 # LOGGING
@@ -204,7 +275,7 @@ def verify_model() -> bool:
     return True
 
 # ============================================================================
-# SUBTITLE GENERATION
+# SUBTITLE GENERATION - WORD-LEVEL REAL-TIME
 # ============================================================================
 
 def format_timestamp(seconds: float) -> str:
@@ -219,7 +290,13 @@ def format_timestamp(seconds: float) -> str:
 
 def generate_subtitles_streaming(audio_path: Path, output_path: Path) -> bool:
     """
-    Generate subtitles using streaming Vosk recognition
+    Generate REAL-TIME WORD-LEVEL subtitles using Vosk streaming recognition
+    
+    Features:
+    - Extracts word-by-word timestamps
+    - Groups words into natural 2-4 word chunks
+    - Perfect sync with speech
+    - Professional appearance
     
     Args:
         audio_path: Path to 16kHz mono WAV file
@@ -232,7 +309,7 @@ def generate_subtitles_streaming(audio_path: Path, output_path: Path) -> bool:
         log("❌ Vosk not available. Install with: pip install vosk")
         return False
     
-    log("🎬 Starting subtitle generation with Vosk Hindi model...")
+    log("🎬 Starting REAL-TIME WORD-LEVEL subtitle generation with Vosk Hindi model...")
     
     try:
         # Load model
@@ -251,16 +328,13 @@ def generate_subtitles_streaming(audio_path: Path, output_path: Path) -> bool:
         
         # Initialize recognizer
         rec = KaldiRecognizer(model, SAMPLE_RATE)
-        rec.SetWords(True)  # Enable word-level timestamps
+        rec.SetWords(True)  # Enable word-level timestamps - CRITICAL for real-time
         
-        # Process audio in chunks
-        subtitles = []
-        subtitle_index = 1
-        current_text = ""
-        current_start = 0.0
+        # Process audio and collect all words
+        all_words = []
         last_heartbeat = time.time()
         
-        log(f"🔄 Processing audio stream...")
+        log(f"🔄 Processing audio stream and extracting word-level timestamps...")
         
         while True:
             data = wf.readframes(CHUNK_SIZE)
@@ -273,76 +347,65 @@ def generate_subtitles_streaming(audio_path: Path, output_path: Path) -> bool:
                 last_heartbeat = time.time()
             
             if rec.AcceptWaveform(data):
-                # Final result for this chunk
+                # Get result with word details
                 result = json.loads(rec.Result())
                 
-                if 'text' in result and result['text'].strip():
-                    text = result['text'].strip()
-                    
-                    # Get timestamps from word details if available
-                    if 'result' in result:
-                        words = result['result']
-                        if words:
-                            start = words[0]['start']
-                            end = words[-1]['end']
-                            
-                            # Add subtitle with center alignment marker
-                            subtitles.append({
-                                'index': subtitle_index,
-                                'start': start,
-                                'end': end,
-                                'text': text
+                # Extract word-level data if available
+                if 'result' in result:
+                    words = result['result']
+                    for word_info in words:
+                        if all(k in word_info for k in ['word', 'start', 'end']):
+                            all_words.append({
+                                'word': word_info['word'],
+                                'start': word_info['start'],
+                                'end': word_info['end']
                             })
-                            subtitle_index += 1
-                            
-                            log(f"   ✓ Subtitle {subtitle_index-1}: {start:.2f}s - {end:.2f}s")
-                    else:
-                        # Fallback: estimate duration (approx 3 seconds)
-                        current_time = wf.tell() / SAMPLE_RATE
-                        subtitles.append({
-                            'index': subtitle_index,
-                            'start': current_time - 3.0,
-                            'end': current_time,
-                            'text': text
-                        })
-                        subtitle_index += 1
         
         # Get final partial result
         final_result = json.loads(rec.FinalResult())
-        if 'text' in final_result and final_result['text'].strip():
-            text = final_result['text'].strip()
-            if 'result' in final_result:
-                words = final_result['result']
-                if words:
-                    start = words[0]['start']
-                    end = words[-1]['end']
-                    subtitles.append({
-                        'index': subtitle_index,
-                        'start': start,
-                        'end': end,
-                        'text': text
+        if 'result' in final_result:
+            words = final_result['result']
+            for word_info in words:
+                if all(k in word_info for k in ['word', 'start', 'end']):
+                    all_words.append({
+                        'word': word_info['word'],
+                        'start': word_info['start'],
+                        'end': word_info['end']
                     })
-                    log(f"   ✓ Final subtitle: {start:.2f}s - {end:.2f}s")
         
         wf.close()
         
+        log(f"✅ Extracted {len(all_words)} words with timestamps")
+        
+        if not all_words:
+            log("⚠️ No words detected in audio")
+            return False
+        
+        # Group words into natural subtitle chunks (2-4 words per subtitle)
+        # Using 3 words per group as default for optimal real-time reading
+        grouped_subtitles = group_words_into_subtitles(all_words, words_per_group=3)
+        
+        log(f"📝 Grouped into {len(grouped_subtitles)} real-time subtitles")
+        
         # Write SRT file with center alignment
-        log(f"📝 Writing {len(subtitles)} subtitles to {output_path}")
+        log(f"📝 Writing {len(grouped_subtitles)} real-time subtitles to {output_path}")
         
         with open(output_path, 'w', encoding='utf-8') as f:
-            for sub in subtitles:
+            for idx, sub in enumerate(grouped_subtitles, 1):
                 # Format: index
-                f.write(f"{sub['index']}\n")
+                f.write(f"{idx}\n")
                 
-                # Format: timestamp --> timestamp
+                # Format: timestamp --> timestamp (using precise word timings)
                 f.write(f"{format_timestamp(sub['start'])} --> {format_timestamp(sub['end'])}\n")
                 
                 # Format: {\an5}centered text (CRITICAL: must have center alignment)
                 f.write(f"{CENTER_ALIGN}{sub['text']}\n\n")
         
-        log(f"✅ Subtitle generation complete!")
-        log(f"   Total subtitles: {len(subtitles)}")
-        log(f"   Duration: {format_timestamp(subtitles[-1]['end']) if subtitles else '0:00'}")
+        log(f"✅ REAL-TIME subtitle generation complete!")
+        log(f"   Total words: {len(all_words)}")
+        log(f"   Total subtitles: {len(grouped_subtitles)}")
+        log(f"   Duration: {format_timestamp(grouped_subtitles[-1]['end']) if grouped_subtitles else '0:00'}")
+        log(f"   Average words per subtitle: {len(all_words)/len(grouped_subtitles):.1f}")
         
         # Verify center alignment in output
         with open(output_path, 'r', encoding='utf-8') as f:
@@ -385,9 +448,7 @@ def generate_subtitles_simple(audio_path: Path, output_path: Path) -> bool:
         wf = wave.open(str(audio_path), "rb")
         rec = KaldiRecognizer(model, SAMPLE_RATE)
         
-        subtitles = []
-        index = 1
-        current_time = 0.0
+        all_words = []
         
         while True:
             data = wf.readframes(4000)
@@ -396,31 +457,29 @@ def generate_subtitles_simple(audio_path: Path, output_path: Path) -> bool:
             
             if rec.AcceptWaveform(data):
                 result = json.loads(rec.Result())
-                if result.get('text', '').strip():
-                    duration = 3.0  # Approximate
-                    subtitles.append({
-                        'index': index,
-                        'start': current_time,
-                        'end': current_time + duration,
-                        'text': result['text'].strip()
-                    })
-                    index += 1
-                    current_time += duration
-            
-            # Update time based on frames processed
-            frames_processed = wf.tell()
-            current_time = frames_processed / SAMPLE_RATE
+                if 'result' in result:
+                    words = result['result']
+                    for word_info in words:
+                        if all(k in word_info for k in ['word', 'start', 'end']):
+                            all_words.append({
+                                'word': word_info['word'],
+                                'start': word_info['start'],
+                                'end': word_info['end']
+                            })
         
         wf.close()
         
+        # Group words into subtitles
+        grouped_subtitles = group_words_into_subtitles(all_words, words_per_group=3)
+        
         # Write SRT with center alignment
         with open(output_path, 'w', encoding='utf-8') as f:
-            for sub in subtitles:
-                f.write(f"{sub['index']}\n")
+            for idx, sub in enumerate(grouped_subtitles, 1):
+                f.write(f"{idx}\n")
                 f.write(f"{format_timestamp(sub['start'])} --> {format_timestamp(sub['end'])}\n")
                 f.write(f"{CENTER_ALIGN}{sub['text']}\n\n")
         
-        log(f"✅ Simple subtitle generation complete: {len(subtitles)} subtitles")
+        log(f"✅ Simple subtitle generation complete: {len(grouped_subtitles)} subtitles")
         return True
         
     except Exception as e:
@@ -473,7 +532,7 @@ def main():
         sys.exit(1)
     
     # Step 5: Generate subtitles
-    log("🚀 Starting subtitle generation...")
+    log("🚀 Starting REAL-TIME WORD-LEVEL subtitle generation...")
     
     if args.simple:
         success = generate_subtitles_simple(TEMP_WAV, OUTPUT_SRT)
@@ -489,11 +548,12 @@ def main():
         subtitle_size = OUTPUT_SRT.stat().st_size / 1024
         log(f"✅ Subtitle file created: {OUTPUT_SRT} ({subtitle_size:.2f} KB)")
         
-        # Count lines in subtitle file
+        # Count subtitles properly
         with open(OUTPUT_SRT, 'r', encoding='utf-8') as f:
-            line_count = len(f.readlines())
-        subtitle_count = line_count // 4  # Each subtitle takes 4 lines
-        log(f"   Total subtitles: {subtitle_count}")
+            content = f.read()
+            subtitle_count = content.count('\n\n')  # Each subtitle ends with blank line
+        
+        log(f"   Total real-time subtitles: {subtitle_count}")
         
         # Final verification of center alignment
         with open(OUTPUT_SRT, 'r', encoding='utf-8') as f:
