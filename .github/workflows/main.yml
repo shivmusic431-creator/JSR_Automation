@@ -809,6 +809,7 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           RUN_ID: ${{ env.RUN_ID }}
+          CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
         run: |
           python src/youtube/upload_to_youtube.py \
             --channel-id "${{ env.CHANNEL_ID }}" \
