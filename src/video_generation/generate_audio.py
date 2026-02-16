@@ -280,23 +280,24 @@ def estimate_duration_from_text(text: str) -> float:
 
 def clean_text_for_synthesis(text: str) -> str:
     """
-    Remove all markers from text before TTS synthesis
-    
-    Args:
-        text: Raw text with markers
-        
-    Returns:
-        Cleaned text ready for TTS
+    Remove ALL non-spoken metadata safely before XTTS synthesis.
+    This ensures emotion indicators are NOT spoken while preserving narration.
     """
-    cleaned = text
+    # Remove ALL emotion indicators like:
+    # (गंभीर स्वर में), (धीरे से), (रहस्यमय स्वर में), etc.
+    text = re.sub(r'\([^)]*\)', '', text)
     
-    for marker_pattern in ALL_MARKERS:
-        cleaned = re.sub(marker_pattern, '', cleaned)
+    # Remove scene markers like:
+    # [SCENE: office_tension]
+    text = re.sub(r'\[SCENE:[^\]]*\]', '', text)
     
-    cleaned = re.sub(r'\s+', ' ', cleaned)
-    cleaned = cleaned.strip()
+    # Remove pause markers if present
+    text = re.sub(r'\[PAUSE-[123]\]', '', text)
     
-    return cleaned
+    # Normalize whitespace
+    text = re.sub(r'\s+', ' ', text)
+    
+    return text.strip()
 
 
 def find_pause_markers(text: str) -> List[Tuple[int, str]]:
@@ -338,6 +339,20 @@ def log(message: str, flush: bool = True):
 def memory_cleanup():
     """Force memory cleanup (CI safety)"""
     gc.collect()
+
+
+def increase_audio_speed(audio: np.ndarray, speed: float = 1.08) -> np.ndarray:
+    """
+    Increase voice speed slightly for more confident narration.
+    Safe for XTTS output and preserves audio quality.
+    """
+    if speed <= 1.0:
+        return audio
+    
+    indices = np.round(np.arange(0, len(audio), speed))
+    indices = indices[indices < len(audio)].astype(int)
+    
+    return audio[indices]
 
 
 # ============================================================================
@@ -1040,6 +1055,9 @@ class XTTSAudioGenerator:
             
             log(f"🔗 Concatenating {len(audio_arrays)} segments...")
             final_audio = np.concatenate(audio_arrays)
+            
+            # Apply confident voice speed boost
+            final_audio = increase_audio_speed(final_audio, speed=1.08)
             
             memory_cleanup()
             return final_audio
