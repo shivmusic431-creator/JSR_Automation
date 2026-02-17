@@ -368,19 +368,17 @@ jobs:
         run: |
           if [ "${{ matrix.audio-type }}" == "long" ]; then
             SCRIPT_FILE="output/script_long.json"
-            AUDIO_FILE="output/audio_long.wav"
             OUTPUT_FILE="output/subtitles_long.srt"
           else
             SCRIPT_FILE="output/script_short.json"
-            AUDIO_FILE="output/audio_short.wav"
             OUTPUT_FILE="output/subtitles_short.srt"
           fi
           
           echo "⚡ Generating ${{ matrix.audio-type }} subtitles using SCRIPT-BASED method (NO SPEECH RECOGNITION)"
           python src/video_generation/generate_subtitles.py \
             --run-id "$RUN_ID" \
+            --audio-dir output \
             --script-file "$SCRIPT_FILE" \
-            --audio-file "$AUDIO_FILE" \
             --output-file "$OUTPUT_FILE"
 
       - name: Validate ${{ matrix.audio-type }} Subtitles
