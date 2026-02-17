@@ -47,6 +47,8 @@ def find_latest_audio_file(output_dir="output"):
 
     # Preferred filenames (XTTS standard outputs)
     preferred_names = [
+        "audio_long.wav",
+        "audio_short.wav",
         "audio.wav",
         "final_audio.wav"
     ]
