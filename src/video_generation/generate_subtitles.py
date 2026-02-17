@@ -114,12 +114,10 @@ def load_script(script_file: Path) -> str:
     """
     Load script from JSON file and assemble full script text.
     
-    Supports both formats:
-    - Old: script_data["hindi_script"]
-    - New: script_data["script"]
-    
-    Assembles using same logic as generate_audio.py:
-    hook + problem_agitation + promise + main_content + practical_tips + conclusion
+    Supports multiple formats automatically:
+    - FORMAT 1 (short video): script["full_text"]
+    - FORMAT 2 (long video structured): sections like hook, problem_agitation, etc.
+    - FORMAT 3 (simple): script["script"] as string
     
     Args:
         script_file: Path to script JSON file
@@ -128,7 +126,7 @@ def load_script(script_file: Path) -> str:
         Full script text as string
         
     Raises:
-        ValueError: If script format is invalid
+        ValueError: If script format is invalid or text is empty
     """
     log(f"📖 Loading script from: {script_file}")
     
@@ -138,49 +136,45 @@ def load_script(script_file: Path) -> str:
     except Exception as e:
         raise ValueError(f"Failed to load script file: {e}")
     
-    # Check for direct script string (new format)
-    if isinstance(script_data, dict) and "script" in script_data:
-        script_text = script_data["script"]
-        log("✅ Using new script format (direct 'script' field)")
-        
-    # Check for assembled script format (old format with sections)
-    elif isinstance(script_data, dict) and "hindi_script" in script_data:
-        script_text = script_data["hindi_script"]
-        log("✅ Using old script format ('hindi_script' field)")
-        
-    # Check for section-based format (generate_audio.py assembly format)
-    elif isinstance(script_data, dict):
-        # Assemble script from sections (same as generate_audio.py)
-        sections = []
-        
-        # Order: hook, problem_agitation, promise, main_content, practical_tips, conclusion
-        section_order = [
-            "hook",
-            "problem_agitation",
-            "promise",
-            "main_content",
-            "practical_tips",
-            "conclusion"
-        ]
-        
-        for section in section_order:
-            if section in script_data and script_data[section]:
-                # Extract text from section
-                if isinstance(script_data[section], dict) and "text" in script_data[section]:
-                    sections.append(script_data[section]["text"])
-                elif isinstance(script_data[section], str):
-                    sections.append(script_data[section])
-        
-        if sections:
-            script_text = " ".join(sections)
-            log(f"✅ Assembled script from {len(sections)} sections")
-        else:
-            raise ValueError("No recognizable script format found in JSON")
-    else:
-        raise ValueError("Script JSON does not contain expected fields")
+    script_text = ""
     
-    # Validate script text
-    if not script_text or not isinstance(script_text, str):
+    if isinstance(script_data, dict):
+        if "script" in script_data:
+            script_obj = script_data["script"]
+            
+            if isinstance(script_obj, str):
+                script_text = script_obj
+            elif isinstance(script_obj, dict):
+                if "full_text" in script_obj:
+                    script_text = script_obj["full_text"]
+                else:
+                    sections = []
+                    
+                    if "hook" in script_obj:
+                        sections.append(script_obj["hook"])
+                    
+                    if "problem_agitation" in script_obj:
+                        sections.append(script_obj["problem_agitation"])
+                    
+                    if "promise" in script_obj:
+                        sections.append(script_obj["promise"])
+                    
+                    if "main_content" in script_obj:
+                        for section in script_obj["main_content"]:
+                            if isinstance(section, dict) and "content" in section:
+                                sections.append(section["content"])
+                    
+                    if "practical_tips" in script_obj:
+                        for tip in script_obj["practical_tips"]:
+                            if isinstance(tip, dict) and "explanation" in tip:
+                                sections.append(tip["explanation"])
+                    
+                    if "conclusion" in script_obj:
+                        sections.append(script_obj["conclusion"])
+                    
+                    script_text = "\n\n".join(sections)
+    
+    if not script_text.strip():
         raise ValueError("Script text is empty or invalid")
     
     # Clean script text (remove extra whitespace)
@@ -188,7 +182,7 @@ def load_script(script_file: Path) -> str:
     
     log(f"✅ Script loaded successfully: {len(script_text)} characters")
     
-    return script_text
+    return script_text.strip()
 
 
 # ============================================================================
