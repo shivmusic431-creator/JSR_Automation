@@ -10,6 +10,7 @@ FIXES:
 - Streaming support for large responses
 - Optimized for Coqui XTTS Hindi voice generation
 - Emotion indicators strictly on separate lines for XTTS metadata
+- SUPPORTS SEPARATE SHORTS SCRIPT GENERATION (not trimmed from long videos)
 """
 import os
 import json
@@ -153,7 +154,7 @@ def get_episode_title(category, sub_category, episode):
             return ideas[episode - 1]
     return f"{sub_category} - Episode {episode}"
 
-def create_script_prompt(category, sub_category, episode, title):
+def create_long_script_prompt(category, sub_category, episode, title):
     """Create the master prompt for Gemini with 10+ minute enforcement and XTTS optimization"""
     
     hindi_category = CATEGORIES_CONFIG.get(category, {}).get("hindi_name", category)
@@ -366,6 +367,124 @@ The JSON MUST have this exact structure:
 **REMEMBER: Use emotional indicators (गंभीर स्वर में) NOT [PAUSE] markers**
 **REMEMBER: Emotional indicators must be placed on a separate line BEFORE the sentence**
 **REMEMBER: Scene markers must be on separate lines, NOT spoken**"""
+    
+    return prompt
+
+
+def create_short_script_prompt(category, sub_category, episode, title):
+    """Create prompt for viral YouTube Shorts script (45-60 seconds)"""
+    
+    hindi_category = CATEGORIES_CONFIG.get(category, {}).get("hindi_name", category)
+    hindi_sub = CATEGORIES_CONFIG.get(category, {}).get("sub_categories", {}).get(sub_category, sub_category)
+    
+    prompt = f"""You are an elite Hindi content strategist specializing in VIRAL YOUTUBE SHORTS.
+
+TASK: Create a promotional YouTube Shorts script that drives viewers to watch the full video.
+
+INPUT PARAMETERS:
+- Main Category: {category} ({hindi_category})
+- Sub-Category: {sub_category} ({hindi_sub})
+- Episode: {episode}
+- Title: {title}
+- **Target Duration: 45-60 SECONDS SPEAKING TIME (100-150 Hindi words)**
+- Target Audience: 18-35 years, Hindi-speaking, Indian urban/semi-urban
+- Tone: High energy, curiosity-driven, emotionally engaging
+- Language: **PURE HINDI (देवनागरी लिपि में शुद्ध हिंदी)**
+
+**ABSOLUTE LANGUAGE RULE:**
+
+Narration must contain ZERO English letters.
+
+Do NOT use characters a-z or A-Z anywhere in narration.
+
+Only Hindi Devanagari script is allowed.
+
+English technical words must be written using Hindi phonetics.
+
+Examples:
+
+Correct: ब्रेन, साइकोलॉजी, रियलिटी  
+Wrong: brain, psychology, reality
+
+This rule is STRICT and must never be violated.
+
+**XTTS VOICE OPTIMIZATION REQUIREMENTS:**
+
+Use emotional reaction indicators in brackets ONLY:
+
+(धीरे से)
+(गंभीर स्वर में)
+(रहस्यमय स्वर में)  
+(उत्साह से)
+(हल्की मुस्कान के साथ)
+(फुसफुसाते हुए)
+(आश्चर्य से)
+(दुखी होकर)
+(गुस्से में)
+(प्यार से)
+
+**EMOTION PLACEMENT RULE (CRITICAL):**
+
+Emotion indicators must ALWAYS be placed on a separate line before narration.
+
+**SHORTS SCRIPT STRUCTURE (45-60 SECONDS):**
+
+1. **HOOK (0-5 seconds / 10-15 words):**
+   - Pattern interrupt statement
+   - Creates immediate curiosity
+   - Shocking or relatable opening
+   - Example: "तुम रोज़ एक ऐसी गलती कर रहे हो..."
+   - Use (उत्साह से) or (रहस्यमय स्वर में)
+
+2. **CONTENT (5-40 seconds / 80-120 words):**
+   - One powerful psychological insight
+   - Emotional engagement throughout
+   - Make it personal with "तुम"
+   - Create "aha moment"
+   - Hint at deeper secrets in full video
+   - Use varied emotions: (गंभीर स्वर में), (आश्चर्य से), (धीरे से)
+
+3. **CTA (40-55 seconds / 20-30 words):**
+   - Clear call to action to watch full video
+   - Create urgency
+   - Example: "पूरी सच्चाई जानने के लिए... वीडियो एंड तक देखो!"
+   - Use (प्यार से) or (उत्साह से)
+
+**VOICE STYLE REQUIREMENTS:**
+- High energy but natural
+- Emotionally engaging
+- Curiosity-driven
+- Must feel like a trailer, not a summary
+
+**SCENE MARKERS FOR VIDEO EDITING (USE EXACTLY):**
+[SCENE: hook_intense] [SCENE: explain_serious] [SCENE: cta_energy]
+
+**CRITICAL OUTPUT INSTRUCTION:**
+You MUST return ONLY a valid JSON object. Do NOT include any explanation, preamble, or text before or after the JSON.
+Do NOT wrap it in markdown code blocks (```json). Return the raw JSON object directly.
+
+The JSON MUST have this exact structure:
+{{
+  "metadata": {{
+    "category": "{category}",
+    "sub_category": "{sub_category}",
+    "episode": {episode},
+    "full_video_title": "{title}"
+  }},
+  "script": {{
+    "hook": "Hook text with emotional indicator",
+    "content": "Main content text with emotional indicators",
+    "cta": "Call to action text with emotional indicator",
+    "full_text": "Complete script combining all parts",
+    "word_count": 120,
+    "estimated_duration": "50 seconds"
+  }}
+}}
+
+**ENSURE THE JSON IS COMPLETE AND VALID.**
+**REMEMBER: Pure Hindi (देवनागरी लिपि), NOT Hinglish**
+**REMEMBER: Emotional indicators must be on separate lines BEFORE sentences**
+**REMEMBER: This is a STANDALONE SHORTS script, NOT trimmed from long video**"""
     
     return prompt
 
@@ -838,16 +957,28 @@ def salvage_truncated_json(text: str) -> str:
     return None
 
 
-def generate_script(category, sub_category, episode, run_id):
-    """Generate script using Gemini 2.5 API with enhanced error handling"""
+def generate_script(category, sub_category, episode, run_id, video_type='long'):
+    """
+    Generate script using Gemini 2.5 API with enhanced error handling
     
-    print(f"📝 Generating script for: {category} - {sub_category} (Ep {episode})")
+    Args:
+        category: Main category
+        sub_category: Sub category
+        episode: Episode number
+        run_id: Run ID
+        video_type: 'long' or 'short'
+    """
+    
+    print(f"📝 Generating {video_type.upper()} script for: {category} - {sub_category} (Ep {episode})")
     
     # Get episode title
     title = get_episode_title(category, sub_category, episode)
     
-    # Create prompt
-    prompt = create_script_prompt(category, sub_category, episode, title)
+    # Create appropriate prompt based on video type
+    if video_type == 'short':
+        prompt = create_short_script_prompt(category, sub_category, episode, title)
+    else:
+        prompt = create_long_script_prompt(category, sub_category, episode, title)
     
     # Models to try in order of preference
     models_to_try = [
@@ -899,23 +1030,50 @@ def generate_script(category, sub_category, episode, run_id):
         # Parse JSON
         script_data = json.loads(json_str)
         
-        # Validate structure
-        if 'metadata' not in script_data:
-            print("⚠️ Missing 'metadata' field, adding minimal structure")
-            script_data['metadata'] = {
-                'final_title': title,
-                'category': category,
-                'sub_category': sub_category,
-                'episode': episode
-            }
-        
-        if 'script' not in script_data:
-            raise ValueError("JSON missing required field: script")
-        
-        # Validate word count
-        word_count = script_data.get('script', {}).get('word_count', 0)
-        if word_count < 1400:
-            print(f"⚠️ Word count {word_count} is below minimum 1400")
+        # Validate structure based on video type
+        if video_type == 'short':
+            if 'script' not in script_data:
+                raise ValueError("JSON missing required field: script")
+            
+            # Ensure full_text is present (create if needed)
+            if 'full_text' not in script_data['script']:
+                script_data['script']['full_text'] = (
+                    script_data['script'].get('hook', '') + ' ' +
+                    script_data['script'].get('content', '') + ' ' +
+                    script_data['script'].get('cta', '')
+                )
+            
+            # Add metadata if missing
+            if 'metadata' not in script_data:
+                script_data['metadata'] = {
+                    'category': category,
+                    'sub_category': sub_category,
+                    'episode': episode,
+                    'full_video_title': title
+                }
+            
+            # Validate word count (shorts: 100-150 words)
+            word_count = script_data['script'].get('word_count', 0)
+            if word_count < 80 or word_count > 200:
+                print(f"⚠️ Shorts word count {word_count} outside optimal range (80-200)")
+            
+        else:  # long
+            if 'metadata' not in script_data:
+                print("⚠️ Missing 'metadata' field, adding minimal structure")
+                script_data['metadata'] = {
+                    'final_title': title,
+                    'category': category,
+                    'sub_category': sub_category,
+                    'episode': episode
+                }
+            
+            if 'script' not in script_data:
+                raise ValueError("JSON missing required field: script")
+            
+            # Validate word count
+            word_count = script_data.get('script', {}).get('word_count', 0)
+            if word_count < 1400:
+                print(f"⚠️ Long script word count {word_count} is below minimum 1400")
         
         # Add generation metadata
         script_data['generation_info'] = {
@@ -923,23 +1081,34 @@ def generate_script(category, sub_category, episode, run_id):
             'sub_category': sub_category,
             'episode': episode,
             'run_id': run_id,
+            'video_type': video_type,
             'generated_at': datetime.now().isoformat(),
             'model_used': model_used,
-            'word_count_validated': word_count >= 1400,
             'response_length_chars': len(response_text)
         }
         
-        # Save to file
+        # Save to file based on video type
         output_dir = Path('output')
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        output_file = output_dir / 'script.json'
+        if video_type == 'short':
+            output_file = output_dir / 'script_short.json'
+        else:
+            output_file = output_dir / 'script_long.json'
+        
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(script_data, f, ensure_ascii=False, indent=2)
         
-        print(f"✅ Script generated: {script_data['metadata'].get('final_title', 'N/A')}")
-        print(f"📝 Word count: {word_count}")
-        print(f"⏱️ Estimated duration: {script_data['script'].get('estimated_duration', 'N/A')}")
+        print(f"✅ {video_type.upper()} script generated")
+        
+        if video_type == 'short':
+            print(f"📝 Word count: {script_data['script'].get('word_count', 'N/A')}")
+            print(f"⏱️ Estimated duration: {script_data['script'].get('estimated_duration', 'N/A')}")
+        else:
+            print(f"📝 Word count: {script_data['script'].get('word_count', 'N/A')}")
+            print(f"⏱️ Estimated duration: {script_data['script'].get('estimated_duration', 'N/A')}")
+            print(f"🎯 Title: {script_data['metadata'].get('final_title', 'N/A')}")
+        
         print(f"💾 Saved to: {output_file}")
         
         return script_data
@@ -964,6 +1133,8 @@ def main():
     parser.add_argument('--sub-category', required=True, help='Sub category')
     parser.add_argument('--episode', required=True, type=int, help='Episode number')
     parser.add_argument('--run-id', required=True, help='Run ID')
+    parser.add_argument('--video-type', choices=['long', 'short'], default='long',
+                       help='Video type: long (10-15 min) or short (45-60 sec)')
     
     args = parser.parse_args()
     
@@ -972,7 +1143,8 @@ def main():
             args.category,
             args.sub_category,
             args.episode,
-            args.run_id
+            args.run_id,
+            args.video_type
         )
         
         # Output for GitHub Actions
