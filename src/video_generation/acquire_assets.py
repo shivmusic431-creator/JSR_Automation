@@ -2,6 +2,7 @@
 """
 Asset Acquisition - Downloads stock footage from Pexels based on target audio duration
 Uses open search strategy and prevents clip reuse via Firebase
+Includes strict video validation to reject static images and low-quality clips
 """
 import os
 import json
@@ -59,6 +60,13 @@ REQUEST_DELAY = 0.5  # seconds between API calls
 MAX_RETRIES = 3
 RETRY_DELAY = 2  # seconds
 MAX_PAGES = 10  # Maximum pages to search to prevent infinite loops
+
+# Validation constants
+MIN_DURATION = 3.0  # seconds
+MIN_FPS = 24.0
+MIN_FRAME_COUNT = 72
+MIN_FILE_SIZE = 100000  # bytes
+MAX_RETRIES_PER_CLIP = 5  # Maximum attempts to find valid clip
 
 # Output directories
 OUTPUT_DIR = Path('output')
@@ -193,6 +201,126 @@ def get_audio_duration(audio_file: Path) -> float:
     except ValueError as e:
         log(f"Invalid duration value: {e}", "ERROR")
         raise RuntimeError(f"Invalid duration from ffprobe: {result.stdout}")
+
+# ============================================================================
+# VIDEO VALIDATION
+# ============================================================================
+
+def validate_video_clip(video_path: Path) -> bool:
+    """
+    Strict validation of video clip using ffprobe
+    Rejects static images, low FPS, short duration, and invalid files
+    
+    Args:
+        video_path: Path to video file
+        
+    Returns:
+        True if clip is valid, False otherwise
+    """
+    if not video_path.exists():
+        log(f"Validation failed: File does not exist - {video_path}", "ERROR")
+        return False
+    
+    # Get file size first (cheapest check)
+    file_size = video_path.stat().st_size
+    if file_size < MIN_FILE_SIZE:
+        log(f"Rejected clip: file size too small ({file_size} bytes < {MIN_FILE_SIZE})", "WARNING")
+        return False
+    
+    # Run ffprobe to get video stream info
+    cmd = [
+        'ffprobe', '-v', 'error',
+        '-select_streams', 'v:0',
+        '-show_entries', 'stream=codec_type,avg_frame_rate,nb_frames',
+        '-show_entries', 'format=duration,size',
+        '-of', 'json',
+        str(video_path)
+    ]
+    
+    try:
+        # Time the validation to ensure performance
+        start_time = time.time()
+        
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5  # Prevent hanging
+        )
+        
+        # Parse JSON output
+        data = json.loads(result.stdout)
+        
+        # Check format duration
+        format_info = data.get('format', {})
+        duration = float(format_info.get('duration', 0))
+        
+        if duration < MIN_DURATION:
+            log(f"Rejected clip: duration too short ({duration:.2f}s < {MIN_DURATION}s)", "WARNING")
+            return False
+        
+        # Check video stream exists
+        streams = data.get('streams', [])
+        if not streams:
+            log("Rejected clip: no video stream found", "WARNING")
+            return False
+        
+        video_stream = streams[0]
+        
+        # Verify codec type
+        codec_type = video_stream.get('codec_type')
+        if codec_type != 'video':
+            log(f"Rejected clip: invalid codec type ({codec_type})", "WARNING")
+            return False
+        
+        # Calculate FPS
+        fps_str = video_stream.get('avg_frame_rate', '0/1')
+        try:
+            if '/' in fps_str:
+                num, den = map(int, fps_str.split('/'))
+                fps = num / den if den != 0 else 0
+            else:
+                fps = float(fps_str)
+        except (ValueError, ZeroDivisionError):
+            fps = 0
+        
+        if fps < MIN_FPS:
+            log(f"Rejected clip: fps too low ({fps:.2f} < {MIN_FPS})", "WARNING")
+            return False
+        
+        # Check frame count
+        frame_count = video_stream.get('nb_frames')
+        if frame_count is None:
+            log("Rejected clip: frame count missing (static image suspected)", "WARNING")
+            return False
+        
+        try:
+            frame_count = int(frame_count)
+            if frame_count < MIN_FRAME_COUNT:
+                log(f"Rejected clip: too few frames ({frame_count} < {MIN_FRAME_COUNT})", "WARNING")
+                return False
+        except (ValueError, TypeError):
+            log("Rejected clip: invalid frame count value", "WARNING")
+            return False
+        
+        # All checks passed
+        validation_time = (time.time() - start_time) * 1000
+        log(f"Accepted clip: valid video ({duration:.2f}s, {fps:.2f}fps, {frame_count} frames) - validation took {validation_time:.1f}ms", "INFO")
+        return True
+        
+    except subprocess.TimeoutExpired:
+        log("Rejected clip: ffprobe timeout", "WARNING")
+        return False
+    except subprocess.CalledProcessError as e:
+        log(f"Rejected clip: ffprobe error - {e}", "WARNING")
+        return False
+    except json.JSONDecodeError as e:
+        log(f"Rejected clip: invalid ffprobe output - {e}", "WARNING")
+        return False
+    except Exception as e:
+        log(f"Rejected clip: unexpected validation error - {e}", "WARNING")
+        return False
 
 # ============================================================================
 # PEXELS API
@@ -339,6 +467,7 @@ def download_video(url: str, output_path: Path) -> bool:
 def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
     """
     Acquire stock footage based on audio duration requirement
+    Includes strict validation to reject static images and low-quality clips
     
     Args:
         script_file: Path to script JSON (unused but kept for compatibility)
@@ -396,6 +525,7 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
     downloaded_clips = []
     used_queries = set()
     skipped_count = 0
+    validation_failures = 0
     page = 1
     
     log("🚀 Starting clip acquisition...")
@@ -459,35 +589,71 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
                     log(f"Invalid duration for video {video_id}: {duration}", "WARNING")
                     continue
                 
-                # Generate filename
-                clip_num = len(downloaded_clips) + 1
-                filename = f"clip_{clip_num:03d}.mp4"
-                output_path = CLIPS_DIR / filename
+                # Try to download a valid clip (with retries)
+                clip_attempts = 0
+                valid_clip_found = False
                 
-                # Download video
-                if download_video(url, output_path):
-                    # Mark as used in Firebase
-                    firebase.mark_clip_used(video_id, duration)
+                while clip_attempts < MAX_RETRIES_PER_CLIP and not valid_clip_found and downloaded_duration < target_duration:
+                    clip_attempts += 1
                     
-                    # Update tracking - FIX: Include both 'filename' and 'file' keys
-                    downloaded_clips.append({
-                        'clip_id': video_id,
-                        'filename': filename,
-                        'file': str(output_path.absolute()),  # Add absolute path
-                        'duration': duration,
-                        'query': query,
-                        'url': url
-                    })
-                    downloaded_duration += duration
-                    found_any = True
+                    # Generate temporary filename
+                    clip_num = len(downloaded_clips) + 1
+                    temp_filename = f"clip_{clip_num:03d}_temp_{clip_attempts}.mp4"
+                    temp_path = CLIPS_DIR / temp_filename
                     
-                    log(f"✅ Added: {filename} ({duration:.1f}s)")
-                    log(f"📊 Progress: {downloaded_duration:.1f}s / {target_duration:.1f}s ({downloaded_duration/target_duration*100:.1f}%)")
-                    
-                    # Rate limiting
-                    time.sleep(REQUEST_DELAY)
-                else:
-                    log(f"Failed to download video {video_id}", "WARNING")
+                    # Download video
+                    if download_video(url, temp_path):
+                        # Validate the downloaded clip
+                        if validate_video_clip(temp_path):
+                            # Valid clip found - rename to final filename
+                            final_filename = f"clip_{clip_num:03d}.mp4"
+                            final_path = CLIPS_DIR / final_filename
+                            
+                            # Remove existing final file if it exists
+                            if final_path.exists():
+                                final_path.unlink()
+                            
+                            # Rename temp to final
+                            temp_path.rename(final_path)
+                            
+                            # Mark as used in Firebase
+                            firebase.mark_clip_used(video_id, duration)
+                            
+                            # Update tracking
+                            downloaded_clips.append({
+                                'clip_id': video_id,
+                                'filename': final_filename,
+                                'file': str(final_path.absolute()),
+                                'duration': duration,
+                                'query': query,
+                                'url': url
+                            })
+                            downloaded_duration += duration
+                            found_any = True
+                            valid_clip_found = True
+                            
+                            log(f"✅ Added: {final_filename} ({duration:.1f}s)")
+                            log(f"📊 Progress: {downloaded_duration:.1f}s / {target_duration:.1f}s ({downloaded_duration/target_duration*100:.1f}%)")
+                        else:
+                            # Invalid clip - delete and retry
+                            validation_failures += 1
+                            temp_path.unlink()
+                            log(f"🔄 Validation failed for clip {video_id} (attempt {clip_attempts}/{MAX_RETRIES_PER_CLIP})", "WARNING")
+                            
+                            # Brief pause before retry
+                            time.sleep(1)
+                    else:
+                        # Download failed
+                        if temp_path.exists():
+                            temp_path.unlink()
+                        log(f"🔄 Download failed for clip {video_id} (attempt {clip_attempts}/{MAX_RETRIES_PER_CLIP})", "WARNING")
+                        time.sleep(1)
+                
+                if not valid_clip_found:
+                    log(f"❌ Failed to get valid clip after {MAX_RETRIES_PER_CLIP} attempts for video {video_id}", "WARNING")
+                
+                # Rate limiting
+                time.sleep(REQUEST_DELAY)
             
             # Mark query as used for this page
             used_queries.add(query)
@@ -507,6 +673,7 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
     log(f"Downloaded duration: {downloaded_duration:.2f}s")
     log(f"Clips downloaded: {len(downloaded_clips)}")
     log(f"Clips skipped (already used): {skipped_count}")
+    log(f"Validation failures: {validation_failures}")
     
     # Strict duration check - pipeline must never continue with insufficient duration
     if downloaded_duration < target_duration:
@@ -526,6 +693,7 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
         'downloaded_duration': downloaded_duration,
         'clips_downloaded': len(downloaded_clips),
         'clips_skipped': skipped_count,
+        'validation_failures': validation_failures,
         'clips': downloaded_clips,
         'generated_at': datetime.now().isoformat()
     }
@@ -569,6 +737,7 @@ def main():
                 'downloaded_duration': args.duration,
                 'clips_downloaded': 0,
                 'clips_skipped': 0,
+                'validation_failures': 0,
                 'clips': [],
                 'generated_at': datetime.now().isoformat(),
                 'note': 'Duration override - no actual downloads'
