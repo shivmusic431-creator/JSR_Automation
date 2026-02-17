@@ -464,7 +464,7 @@ jobs:
             --script-file output/script_long.json \
             --run-id "$RUN_ID" \
             --video-type long \
-            --audio-duration ${{ steps.get_duration.outputs.duration }}
+            --duration ${{ steps.get_duration.outputs.duration }}
 
       - name: Upload Long Assets Artifact
         uses: actions/upload-artifact@v4
@@ -536,7 +536,7 @@ jobs:
             --script-file output/script_short.json \
             --run-id "$RUN_ID" \
             --video-type short \
-            --audio-duration ${{ steps.get_duration.outputs.duration }}
+            --duration ${{ steps.get_duration.outputs.duration }}
 
       - name: Upload Short Assets Artifact
         uses: actions/upload-artifact@v4
