@@ -14,6 +14,7 @@ Features:
 - Backwards compatible with existing pipeline
 - Production-safe voice cloning with my_voice.wav
 - Studio-quality audio output with smoothing
+- SUPPORTS BOTH LONG AND SHORT SCRIPTS with separate output files
 
 ARCHITECTURE:
 - Single model load per process (XTTS v2 optimization)
@@ -83,6 +84,7 @@ class SessionState:
     """Persistent session state for resume capability"""
     run_id: str
     script_file: str
+    script_type: str  # 'long' or 'short'
     total_chunks: int
     chunks_completed: int
     chunks_failed: int
@@ -100,24 +102,24 @@ class SessionState:
 # CONSTANTS
 # ============================================================================
 
-# Audio generation parameters - CRITICAL CI-SAFE LIMITS
-TARGET_CHUNK_DURATION = 120  # seconds (~2 minutes)
-MIN_CHUNK_DURATION = 90      # Lowered from 100 for more flexibility
-MAX_CHUNK_DURATION = 150     # HARD CAP - NEVER EXCEED
-WORDS_PER_MINUTE = 150       # Average speaking rate for Hindi
+# Audio generation parameters - CI-SAFE LIMITS
+TARGET_CHUNK_DURATION = 60   # seconds (target duration)
+MIN_CHUNK_DURATION = 45       # minimum chunk duration
+MAX_CHUNK_DURATION = 75       # HARD CAP - NEVER EXCEED
+WORDS_PER_MINUTE = 150        # Average speaking rate for Hindi
 
 # FIX 2: REDUCED micro-segment size to 600 chars to prevent XTTS token limit crash
 # XTTS v2 has a hard limit of 400 tokens per generation
 # 600 characters is a safe upper bound that respects this limit
-XTTS_MICRO_SEGMENT_CHARS = 600  # REDUCED FROM 1200 TO PREVENT TOKEN LIMIT CRASH
+XTTS_MICRO_SEGMENT_CHARS = 600
 MAX_RETRIES = 3
 
 # XTTS Configuration
 XTTS_MODEL_NAME = "tts_models/multilingual/multi-dataset/xtts_v2"
-XTTS_SAMPLE_RATE = 24000  # XTTS v2 native sample rate - FIX 5 enforced
+XTTS_SAMPLE_RATE = 24000  # XTTS v2 native sample rate
 XTTS_LANGUAGE = "hi"  # Hindi language code
 
-# Voice cloning configuration - FIX 3: Always use voice cloning
+# Voice cloning configuration
 VOICE_CLONE_FILE = "voices/my_voice.wav"
 USE_VOICE_CLONE = True  # Always True for professional output
 
@@ -126,18 +128,12 @@ HEARTBEAT_INTERVAL = 20  # seconds - log activity every 20s
 MAX_SILENT_TIME = 30  # seconds - never silent for more than 30s
 MEMORY_CHECK_INTERVAL = 5  # Check memory every N micro-segments
 
-# Pause markers (priority order - longer pauses preferred for chunking)
-PAUSE_MARKERS = [
-    r'\[PAUSE-3\]',  # 3 seconds - highest priority for chunking
-    r'\[PAUSE-2\]',  # 2 seconds
-    r'\[PAUSE-1\]',  # 1 second
-]
-
 # Directories
 OUTPUT_DIR = Path('output')
 CHUNKS_DIR = OUTPUT_DIR / 'audio_chunks'
 SESSION_FILE = CHUNKS_DIR / 'session.json'
-FINAL_AUDIO_FILE = OUTPUT_DIR / 'audio.wav'
+FINAL_AUDIO_FILE_LONG = OUTPUT_DIR / 'audio_long.wav'
+FINAL_AUDIO_FILE_SHORT = OUTPUT_DIR / 'audio_short.wav'
 
 
 # ============================================================================
@@ -216,7 +212,6 @@ def memory_cleanup():
     gc.collect()
 
 
-# FIX 4: Apply audio smoothing to prevent popping and cracking
 def smooth_audio(audio_array: np.ndarray) -> np.ndarray:
     """
     Apply smoothing to audio to prevent popping and cracking
@@ -263,7 +258,6 @@ def estimate_duration_from_text(text: str) -> float:
     return duration
 
 
-# FIX 1: STRICT TEXT CLEANING - Remove ALL metadata safely
 def clean_text_for_synthesis(text: str) -> str:
     """
     Remove ALL non-spoken metadata safely before XTTS synthesis.
@@ -286,28 +280,6 @@ def clean_text_for_synthesis(text: str) -> str:
     return text.strip()
 
 
-def find_pause_markers(text: str) -> List[Tuple[int, str]]:
-    """
-    Find all pause marker positions in text
-    
-    Args:
-        text: Script text
-        
-    Returns:
-        List of (position, marker_type) tuples
-    """
-    markers = []
-    
-    for marker_pattern in PAUSE_MARKERS:
-        for match in re.finditer(marker_pattern, text):
-            marker_type = match.group(0)
-            markers.append((match.start(), marker_type))
-    
-    markers.sort(key=lambda x: x[0])
-    
-    return markers
-
-
 def increase_audio_speed(audio: np.ndarray, speed: float = 1.08) -> np.ndarray:
     """
     Increase voice speed slightly for more confident narration.
@@ -326,384 +298,363 @@ def increase_audio_speed(audio: np.ndarray, speed: float = 1.08) -> np.ndarray:
 
 
 # ============================================================================
-# PRODUCTION-SAFE CHUNKING SYSTEM
+# PRODUCTION-SAFE SENTENCE-BASED CHUNKING SYSTEM
 # ============================================================================
 
 class ScriptChunker:
     """
-    Production-safe pause-aware script chunking system
+    Deterministic sentence-based chunking system for XTTS audio generation
     
-    CRITICAL FIXES:
-    - Deterministic iteration (no exponential accumulation)
-    - Hard 150s duration cap enforcement
-    - Safe pause-aware splitting with fallback
-    - Chunk validation layer
+    CRITICAL DESIGN:
+    - Splits ONLY at Hindi sentence boundaries (। ? !)
+    - Never cuts mid-sentence
+    - Hard duration caps: 45s min, 75s max
+    - No pause marker dependency
+    - Fully deterministic iteration
     - Memory-safe operation
+    - CI/CD safe execution
+    
+    PRODUCTION REQUIREMENTS:
+    - Zero text overlap between chunks
+    - Zero text loss (full narration preserved)
+    - Zero mid-sentence cuts
+    - Stable processing time
+    - Reduced XTTS freeze probability
     """
     
-    def __init__(self, script_text: str):
+    def __init__(self, script_text: str, script_type: str = 'long'):
         self.script_text = script_text
+        self.script_type = script_type
         self.chunks: List[ChunkMetadata] = []
-    
+        
     def chunk_script(self) -> List[ChunkMetadata]:
         """
-        Split script into pause-aware chunks with strict duration caps
+        Split script into sentence-based chunks with strict duration caps
+        
+        ALGORITHM:
+        1. Split full script into sentences using Hindi boundaries (। ? !)
+        2. Accumulate sentences until duration approaches MAX_CHUNK_DURATION
+        3. Never split mid-sentence
+        4. Enforce 45s min / 75s max per chunk
+        5. Preserve complete narration continuity
+        
+        For shorts: Scripts are short enough to be a single chunk
+        For long: Split into multiple chunks as needed
         
         Returns:
             List of chunk metadata objects
         """
-        log("📋 Analyzing script for production-safe chunking...")
-        log(f"   Script length: {len(self.script_text)} chars")
-        log(f"   Max chunk duration: {MAX_CHUNK_DURATION}s (HARD CAP)")
+        log("=" * 80)
+        log(f"🔨 PRODUCTION CHUNKING: Sentence-Based Deterministic Split ({self.script_type.upper()})")
+        log("=" * 80)
+        log(f"📋 Script analysis:")
+        log(f"   Total length: {len(self.script_text)} chars")
         
-        # Find all pause markers
-        pause_positions = find_pause_markers(self.script_text)
-        
-        if not pause_positions:
-            log("⚠️ No pause markers found - using sentence-based chunking")
-            return self._fallback_sentence_chunking()
-        
-        log(f"✓ Found {len(pause_positions)} pause markers")
-        
-        # Build chunks deterministically
-        chunks = self._build_chunks_deterministic(pause_positions)
-        
-        # Validate all chunks
-        chunks = self._validate_and_fix_chunks(chunks)
-        
-        log(f"✅ Created {len(chunks)} validated chunks")
-        return chunks
-    
-    def _build_chunks_deterministic(self, pause_positions: List[Tuple[int, str]]) -> List[ChunkMetadata]:
-        """
-        CRITICAL: Deterministic chunk builder with no exponential accumulation
-        
-        Algorithm:
-        1. Iterate through script ONCE
-        2. Track current position (never go backwards)
-        3. Accumulate text until pause marker + duration check
-        4. Finalize chunk and reset accumulator
-        5. NEVER re-append prior text
-        
-        Args:
-            pause_positions: List of (position, marker) tuples
+        # For shorts, always treat as single chunk
+        if self.script_type == 'short':
+            log("📊 Shorts script detected - generating as single chunk")
+            estimated_duration = estimate_duration_from_text(self.script_text)
             
-        Returns:
-            List of chunks
-        """
-        chunks = []
-        current_pos = 0  # Current position in script
-        chunk_start_pos = 0  # Start of current chunk being built
-        
-        log("🔨 Building chunks deterministically...")
-        
-        for i, (marker_pos, marker_type) in enumerate(pause_positions):
-            # Calculate end position (after the marker)
-            marker_len = len(marker_type)
-            segment_end = marker_pos + marker_len
+            # Validate shorts duration
+            if estimated_duration > 75:
+                log(f"⚠️ WARNING: Shorts script duration ({estimated_duration:.1f}s) exceeds 75s")
+                log(f"   This may exceed YouTube Shorts limits")
             
-            # Extract candidate chunk text (from chunk start to current marker)
-            candidate_text = self.script_text[chunk_start_pos:segment_end].strip()
-            
-            if not candidate_text:
-                continue
-            
-            # Estimate duration
-            estimated_duration = estimate_duration_from_text(candidate_text)
-            
-            log(f"  Evaluating at marker {i+1}/{len(pause_positions)}: "
-                f"{estimated_duration:.1f}s, {len(candidate_text)} chars")
-            
-            # Decision logic with HARD CAP enforcement
-            should_finalize = False
-            reason = ""
-            
-            # CRITICAL: Hard cap enforcement
-            if estimated_duration > MAX_CHUNK_DURATION:
-                should_finalize = True
-                reason = f"HARD CAP EXCEEDED ({estimated_duration:.1f}s > {MAX_CHUNK_DURATION}s)"
-            
-            # Normal chunking logic
-            elif estimated_duration >= MIN_CHUNK_DURATION:
-                if marker_type in [r'\[PAUSE-3\]', r'\[PAUSE-2\]']:
-                    should_finalize = True
-                    reason = f"Good pause point ({marker_type})"
-                elif estimated_duration >= TARGET_CHUNK_DURATION:
-                    should_finalize = True
-                    reason = f"Target duration reached"
-            
-            # Last marker - always finalize
-            if i == len(pause_positions) - 1 and not should_finalize:
-                should_finalize = True
-                reason = "Last marker"
-            
-            # Finalize chunk if conditions met
-            if should_finalize:
-                chunk_id = len(chunks)
-                
-                # SAFETY: Final duration check before creating chunk
-                if estimated_duration > MAX_CHUNK_DURATION:
-                    log(f"  ⚠️ WARNING: Chunk {chunk_id} exceeds cap, attempting split...")
-                    # Try to split at sentence boundary
-                    split_chunks = self._emergency_split_chunk(
-                        candidate_text, 
-                        chunk_start_pos,
-                        chunk_id
-                    )
-                    chunks.extend(split_chunks)
-                else:
-                    # Create normal chunk
-                    chunk = ChunkMetadata(
-                        chunk_id=chunk_id,
-                        text=candidate_text,
-                        estimated_duration=estimated_duration,
-                        status=ChunkStatus.PENDING.value,
-                        retries=0,
-                        error=None,
-                        wav_path=None,
-                        timestamp=None
-                    )
-                    chunks.append(chunk)
-                    log(f"  ✅ Chunk {chunk_id}: {estimated_duration:.1f}s, "
-                        f"{len(candidate_text)} chars - {reason}")
-                
-                # CRITICAL: Move to next chunk start (NO OVERLAP)
-                chunk_start_pos = segment_end
-                current_pos = segment_end
-        
-        # Handle any remaining text after last pause marker
-        if chunk_start_pos < len(self.script_text):
-            remaining_text = self.script_text[chunk_start_pos:].strip()
-            if remaining_text:
-                estimated = estimate_duration_from_text(remaining_text)
-                
-                # Check duration cap
-                if estimated > MAX_CHUNK_DURATION:
-                    log(f"  ⚠️ Remaining text exceeds cap, splitting...")
-                    split_chunks = self._emergency_split_chunk(
-                        remaining_text,
-                        chunk_start_pos,
-                        len(chunks)
-                    )
-                    chunks.extend(split_chunks)
-                else:
-                    chunk_id = len(chunks)
-                    chunk = ChunkMetadata(
-                        chunk_id=chunk_id,
-                        text=remaining_text,
-                        estimated_duration=estimated,
-                        status=ChunkStatus.PENDING.value,
-                        retries=0,
-                        error=None,
-                        wav_path=None,
-                        timestamp=None
-                    )
-                    chunks.append(chunk)
-                    log(f"  ✅ Final chunk {chunk_id}: {estimated:.1f}s")
-        
-        return chunks
-    
-    def _emergency_split_chunk(self, text: str, start_pos: int, base_chunk_id: int) -> List[ChunkMetadata]:
-        """
-        Emergency splitter for chunks that exceed MAX_CHUNK_DURATION
-        Splits at sentence boundaries to stay under cap
-        
-        Args:
-            text: Text to split
-            start_pos: Starting position in original script
-            base_chunk_id: Base chunk ID for numbering
-            
-        Returns:
-            List of split chunks
-        """
-        log(f"  🚨 Emergency split activated for {len(text)} chars")
-        
-        sentences = re.split(r'([।?!]+)', text)
-        split_chunks = []
-        current_text = ""
-        
-        for i in range(0, len(sentences), 2):
-            sentence = sentences[i].strip()
-            delimiter = sentences[i+1] if i+1 < len(sentences) else ""
-            
-            if not sentence:
-                continue
-            
-            full_sentence = sentence + delimiter
-            candidate = (current_text + " " + full_sentence) if current_text else full_sentence
-            duration = estimate_duration_from_text(candidate)
-            
-            # If adding this sentence would exceed cap, finalize current chunk
-            if duration > MAX_CHUNK_DURATION and current_text:
-                chunk_id = base_chunk_id + len(split_chunks)
-                split_chunks.append(ChunkMetadata(
-                    chunk_id=chunk_id,
-                    text=current_text.strip(),
-                    estimated_duration=estimate_duration_from_text(current_text),
-                    status=ChunkStatus.PENDING.value,
-                    retries=0,
-                    error=None,
-                    wav_path=None,
-                    timestamp=None
-                ))
-                log(f"    Split chunk {chunk_id}: {split_chunks[-1].estimated_duration:.1f}s")
-                current_text = full_sentence
-            else:
-                current_text = candidate
-        
-        # Handle remaining text
-        if current_text.strip():
-            chunk_id = base_chunk_id + len(split_chunks)
-            split_chunks.append(ChunkMetadata(
-                chunk_id=chunk_id,
-                text=current_text.strip(),
-                estimated_duration=estimate_duration_from_text(current_text),
+            chunk = ChunkMetadata(
+                chunk_id=0,
+                text=self.script_text.strip(),
+                estimated_duration=estimated_duration,
                 status=ChunkStatus.PENDING.value,
                 retries=0,
                 error=None,
                 wav_path=None,
                 timestamp=None
-            ))
-            log(f"    Split chunk {chunk_id}: {split_chunks[-1].estimated_duration:.1f}s")
+            )
+            self.chunks = [chunk]
+            
+            log(f"\n📊 Chunk Statistics:")
+            log(f"   Total chunks: 1")
+            log(f"   Duration: {estimated_duration:.1f}s")
+            
+            return self.chunks
         
-        return split_chunks
+        # For long scripts, use sentence-based chunking
+        log(f"   Min chunk: {MIN_CHUNK_DURATION}s")
+        log(f"   Target: {TARGET_CHUNK_DURATION}s")
+        log(f"   Max chunk: {MAX_CHUNK_DURATION}s (HARD CAP)")
+        
+        # Step 1: Split into sentences using Hindi boundaries
+        # Pattern matches । ? ! followed by whitespace
+        sentences = re.split(r'(?<=[।?!])\s+|\n+', self.script_text)
+        
+        # Clean empty sentences
+        sentences = [s.strip() for s in sentences if s.strip()]
+        
+        log(f"📊 Found {len(sentences)} sentences")
+        
+        if not sentences:
+            log("❌ No sentences found in script")
+            return []
+        
+        # Log first few sentences for debugging
+        log("\n📝 First 5 sentences:")
+        for i, s in enumerate(sentences[:5]):
+            preview = s[:50] + "..." if len(s) > 50 else s
+            log(f"   {i+1}. {preview}")
+        
+        # Step 2-6: Build chunks by accumulating sentences
+        chunks = self._build_chunks_from_sentences(sentences)
+        
+        # Step 7: Validate all chunks
+        chunks = self._validate_chunks(chunks)
+        
+        log("\n" + "=" * 80)
+        log(f"✅ CHUNKING COMPLETE: {len(chunks)} chunks created")
+        log("=" * 80)
+        
+        # Log chunk statistics
+        if chunks:
+            total_duration = sum(c.estimated_duration for c in chunks)
+            max_duration = max(c.estimated_duration for c in chunks)
+            min_duration = min(c.estimated_duration for c in chunks)
+            
+            log(f"\n📊 Chunk Statistics:")
+            log(f"   Total chunks: {len(chunks)}")
+            log(f"   Total duration: {total_duration:.1f}s ({total_duration/60:.1f} min)")
+            log(f"   Min chunk: {min_duration:.1f}s")
+            log(f"   Max chunk: {max_duration:.1f}s")
+            log(f"   Avg chunk: {total_duration/len(chunks):.1f}s")
+            
+            # Log each chunk's composition
+            log("\n📋 Chunk Composition:")
+            for i, chunk in enumerate(chunks):
+                sentence_count = len(chunk.text.split('।'))  # Rough estimate
+                log(f"   Chunk {i:2d}: {chunk.estimated_duration:5.1f}s | "
+                    f"{len(chunk.text):5d} chars | ~{sentence_count} sentences")
+        
+        return chunks
     
-    def _validate_and_fix_chunks(self, chunks: List[ChunkMetadata]) -> List[ChunkMetadata]:
+    def _build_chunks_from_sentences(self, sentences: List[str]) -> List[ChunkMetadata]:
         """
-        Final validation pass - ensures no chunks exceed hard caps
+        Build chunks by accumulating sentences until duration cap
+        
+        CRITICAL DESIGN:
+        - NEVER splits a sentence
+        - Single pass through sentences
+        - Deterministic accumulation
+        - No backtracking or overlap
+        
+        RULES:
+        1. HARD CAP: If candidate_duration > MAX_CHUNK_DURATION (75s)
+           - Finalize current chunk immediately
+           - Start new chunk with current sentence
+           
+        2. TARGET REACHED: If candidate_duration >= TARGET_CHUNK_DURATION (60s)
+           - Finalize current chunk INCLUDING current sentence
+           
+        3. ACCUMULATION: If candidate_duration < TARGET_CHUNK_DURATION
+           - Keep accumulating sentences
+        
+        Args:
+            sentences: List of sentences from script
+            
+        Returns:
+            List of chunk metadata
+        """
+        chunks = []
+        current_chunk_sentences = []
+        current_chunk_text = ""
+        
+        for i, sentence in enumerate(sentences):
+            # Calculate duration if we add this sentence
+            candidate_text = (current_chunk_text + " " + sentence).strip() if current_chunk_text else sentence
+            candidate_duration = estimate_duration_from_text(candidate_text)
+            
+            log(f"\n🔍 Processing sentence {i+1}/{len(sentences)}:")
+            log(f"   Sentence length: {len(sentence)} chars")
+            log(f"   Current chunk: {len(current_chunk_sentences)} sentences")
+            log(f"   Current duration: {estimate_duration_from_text(current_chunk_text):.1f}s" if current_chunk_text else "   Current duration: 0.0s")
+            log(f"   Candidate duration: {candidate_duration:.1f}s")
+            
+            # RULE A: HARD CAP - Never exceed MAX_CHUNK_DURATION
+            if candidate_duration > MAX_CHUNK_DURATION:
+                if current_chunk_sentences:
+                    # Case 1: We have existing sentences - finalize current chunk first
+                    chunk_id = len(chunks)
+                    chunk_duration = estimate_duration_from_text(current_chunk_text)
+                    
+                    log(f"   ⚠️ Candidate exceeds MAX ({MAX_CHUNK_DURATION}s)")
+                    log(f"   ✅ Finalizing chunk {chunk_id} with {len(current_chunk_sentences)} sentences ({chunk_duration:.1f}s)")
+                    
+                    chunk = ChunkMetadata(
+                        chunk_id=chunk_id,
+                        text=current_chunk_text.strip(),
+                        estimated_duration=chunk_duration,
+                        status=ChunkStatus.PENDING.value,
+                        retries=0,
+                        error=None,
+                        wav_path=None,
+                        timestamp=None
+                    )
+                    chunks.append(chunk)
+                    
+                    # Start new chunk with current sentence only
+                    current_chunk_sentences = [sentence]
+                    current_chunk_text = sentence
+                    
+                    log(f"   🆕 Started new chunk with current sentence only")
+                    
+                else:
+                    # Case 2: Single sentence exceeds MAX cap - create chunk with this single sentence
+                    # This should be extremely rare with proper script writing
+                    chunk_id = len(chunks)
+                    
+                    log(f"   ⚠️ WARNING: Single sentence exceeds {MAX_CHUNK_DURATION}s cap!")
+                    log(f"   📝 Sentence: {sentence[:100]}...")
+                    
+                    chunk = ChunkMetadata(
+                        chunk_id=chunk_id,
+                        text=sentence.strip(),
+                        estimated_duration=candidate_duration,
+                        status=ChunkStatus.PENDING.value,
+                        retries=0,
+                        error=None,
+                        wav_path=None,
+                        timestamp=None
+                    )
+                    chunks.append(chunk)
+                    
+                    # Reset current chunk (sentence already processed)
+                    current_chunk_sentences = []
+                    current_chunk_text = ""
+            
+            # RULE B: TARGET REACHED - Candidate meets or exceeds target duration
+            elif candidate_duration >= TARGET_CHUNK_DURATION:
+                # Add current sentence to chunk
+                current_chunk_sentences.append(sentence)
+                current_chunk_text = candidate_text
+                
+                chunk_id = len(chunks)
+                final_duration = estimate_duration_from_text(current_chunk_text)
+                
+                log(f"   ✅ TARGET duration reached: {candidate_duration:.1f}s")
+                log(f"   📦 Finalizing chunk {chunk_id} with {len(current_chunk_sentences)} sentences")
+                
+                chunk = ChunkMetadata(
+                    chunk_id=chunk_id,
+                    text=current_chunk_text.strip(),
+                    estimated_duration=final_duration,
+                    status=ChunkStatus.PENDING.value,
+                    retries=0,
+                    error=None,
+                    wav_path=None,
+                    timestamp=None
+                )
+                chunks.append(chunk)
+                
+                log(f"   ✅ Chunk {chunk_id} finalized: {final_duration:.1f}s, {len(current_chunk_text)} chars")
+                
+                # Reset for next chunk
+                current_chunk_sentences = []
+                current_chunk_text = ""
+            
+            # RULE C: ACCUMULATION - Continue building current chunk
+            else:
+                current_chunk_sentences.append(sentence)
+                current_chunk_text = candidate_text
+                log(f"   📚 Accumulating: now {len(current_chunk_sentences)} sentences")
+        
+        # Handle remaining sentences after loop
+        if current_chunk_sentences:
+            chunk_id = len(chunks)
+            chunk_duration = estimate_duration_from_text(current_chunk_text)
+            
+            # Check if remaining chunk is too small (optional warning)
+            if chunk_duration < MIN_CHUNK_DURATION and chunks:
+                log(f"\n⚠️ Final chunk {chunk_id} is smaller than minimum: {chunk_duration:.1f}s < {MIN_CHUNK_DURATION}s")
+                log(f"   This is acceptable for the last chunk - continuing...")
+            
+            log(f"\n📦 Finalizing last chunk {chunk_id} with {len(current_chunk_sentences)} sentences ({chunk_duration:.1f}s)")
+            
+            chunk = ChunkMetadata(
+                chunk_id=chunk_id,
+                text=current_chunk_text.strip(),
+                estimated_duration=chunk_duration,
+                status=ChunkStatus.PENDING.value,
+                retries=0,
+                error=None,
+                wav_path=None,
+                timestamp=None
+            )
+            chunks.append(chunk)
+        
+        # Verify no text loss
+        reconstructed_text = " ".join([chunk.text for chunk in chunks])
+        original_words = set(self.script_text.split())
+        reconstructed_words = set(reconstructed_text.split())
+        
+        if not original_words.issubset(reconstructed_words):
+            log(f"\n⚠️ WARNING: Possible text loss detected in chunking!")
+        
+        log(f"\n✅ Chunking complete: {len(chunks)} chunks created")
+        
+        return chunks
+    
+    def _validate_chunks(self, chunks: List[ChunkMetadata]) -> List[ChunkMetadata]:
+        """
+        Final validation pass to ensure all chunks meet requirements
+        
+        Validation checks:
+        1. No empty chunks
+        2. No chunks exceeding MAX_DURATION
+        3. All chunks contain complete sentences
         
         Args:
             chunks: List of chunks to validate
             
         Returns:
-            Validated and fixed chunks
+            Validated chunks (with warnings if issues found)
         """
-        log("🔍 Validating chunks...")
+        log("\n🔍 Validating chunks...")
         
         validated_chunks = []
         issues_found = 0
         
         for i, chunk in enumerate(chunks):
-            # Check 1: Duration cap
-            if chunk.estimated_duration > MAX_CHUNK_DURATION:
-                log(f"  ❌ Chunk {i} exceeds cap: {chunk.estimated_duration:.1f}s > {MAX_CHUNK_DURATION}s")
-                issues_found += 1
-                # Re-split this chunk
-                split_chunks = self._emergency_split_chunk(chunk.text, 0, len(validated_chunks))
-                validated_chunks.extend(split_chunks)
-                continue
-            
-            # Check 2: Empty text
+            # Check 1: Empty chunk
             if not chunk.text.strip():
-                log(f"  ⚠️ Chunk {i} is empty - skipping")
+                log(f"  ❌ Chunk {i} is empty - SKIPPING")
                 issues_found += 1
                 continue
             
-            # Check 3: Reasonable text length (sanity check)
-            if len(chunk.text) > 5000:  # ~5000 chars is very long
+            # Check 2: Duration cap
+            if chunk.estimated_duration > MAX_CHUNK_DURATION:
+                log(f"  ⚠️ Chunk {i} exceeds MAX cap: {chunk.estimated_duration:.1f}s > {MAX_CHUNK_DURATION}s")
+                log(f"     Text preview: {chunk.text[:100]}...")
+                issues_found += 1
+                # Still include chunk (can't split mid-sentence)
+            
+            # Check 3: Ends with sentence boundary
+            if not chunk.text.rstrip().endswith(('।', '?', '!')):
+                log(f"  ⚠️ Chunk {i} does not end with sentence boundary")
+                issues_found += 1
+            
+            # Check 4: Reasonable text length (sanity check)
+            if len(chunk.text) > 5000:
                 log(f"  ⚠️ Chunk {i} has unusual length: {len(chunk.text)} chars")
             
-            # Chunk is valid
             validated_chunks.append(chunk)
         
-        # Re-index chunks sequentially
+        # Re-index chunks sequentially (ensures clean IDs)
         for i, chunk in enumerate(validated_chunks):
             chunk.chunk_id = i
         
         if issues_found > 0:
-            log(f"  ⚠️ Fixed {issues_found} issues during validation")
+            log(f"\n⚠️ Validation complete: {issues_found} issues found")
         else:
-            log(f"  ✅ All chunks validated successfully")
-        
-        # Final sanity check - print chunk statistics
-        total_duration = sum(c.estimated_duration for c in validated_chunks)
-        max_duration = max(c.estimated_duration for c in validated_chunks) if validated_chunks else 0
-        
-        log(f"  📊 Chunk statistics:")
-        log(f"     Total chunks: {len(validated_chunks)}")
-        log(f"     Total estimated duration: {total_duration:.1f}s ({total_duration/60:.1f} min)")
-        log(f"     Max chunk duration: {max_duration:.1f}s")
-        log(f"     Avg chunk duration: {total_duration/len(validated_chunks):.1f}s")
+            log(f"\n✅ All chunks validated successfully")
         
         return validated_chunks
-    
-    def _fallback_sentence_chunking(self) -> List[ChunkMetadata]:
-        """
-        Fallback to sentence-based chunking when no pause markers exist
-        WITH STRICT DURATION CAP ENFORCEMENT
-        """
-        log("🔄 Using fallback sentence-based chunking...")
-        
-        sentences = re.split(r'([।?!]+)', self.script_text)
-        chunks = []
-        current_text = ""
-        
-        for i in range(0, len(sentences), 2):
-            sentence = sentences[i].strip()
-            delimiter = sentences[i+1] if i+1 < len(sentences) else ""
-            
-            if not sentence:
-                continue
-            
-            full_sentence = sentence + delimiter
-            candidate = (current_text + " " + full_sentence) if current_text else full_sentence
-            duration = estimate_duration_from_text(candidate)
-            
-            # CRITICAL: Hard cap check
-            if duration > MAX_CHUNK_DURATION:
-                # Finalize current chunk if it exists
-                if current_text:
-                    chunk_id = len(chunks)
-                    chunks.append(ChunkMetadata(
-                        chunk_id=chunk_id,
-                        text=current_text.strip(),
-                        estimated_duration=estimate_duration_from_text(current_text),
-                        status=ChunkStatus.PENDING.value,
-                        retries=0,
-                        error=None,
-                        wav_path=None,
-                        timestamp=None
-                    ))
-                    log(f"  Chunk {chunk_id}: {chunks[-1].estimated_duration:.1f}s")
-                
-                # Start new chunk with current sentence
-                current_text = full_sentence
-            
-            # Normal accumulation within cap
-            elif duration >= MIN_CHUNK_DURATION:
-                chunk_id = len(chunks)
-                chunks.append(ChunkMetadata(
-                    chunk_id=chunk_id,
-                    text=candidate.strip(),
-                    estimated_duration=duration,
-                    status=ChunkStatus.PENDING.value,
-                    retries=0,
-                    error=None,
-                    wav_path=None,
-                    timestamp=None
-                ))
-                log(f"  Chunk {chunk_id}: {duration:.1f}s")
-                current_text = ""
-            else:
-                current_text = candidate
-        
-        # Handle remaining text
-        if current_text.strip():
-            chunk_id = len(chunks)
-            duration = estimate_duration_from_text(current_text)
-            chunks.append(ChunkMetadata(
-                chunk_id=chunk_id,
-                text=current_text.strip(),
-                estimated_duration=duration,
-                status=ChunkStatus.PENDING.value,
-                retries=0,
-                error=None,
-                wav_path=None,
-                timestamp=None
-            ))
-            log(f"  Chunk {chunk_id}: {duration:.1f}s")
-        
-        return chunks
 
 
 # ============================================================================
@@ -715,9 +666,10 @@ class SessionManager:
     Persistent session state management for resume capability
     """
     
-    def __init__(self, run_id: str, script_file: str):
+    def __init__(self, run_id: str, script_file: str, script_type: str = 'long'):
         self.run_id = run_id
         self.script_file = script_file
+        self.script_type = script_type
         self.session: Optional[SessionState] = None
         
         CHUNKS_DIR.mkdir(parents=True, exist_ok=True)
@@ -729,13 +681,15 @@ class SessionManager:
             with open(SESSION_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
-            if data['run_id'] == self.run_id:
-                log("✓ Session loaded successfully")
+            # Check if run_id AND script_type match
+            if data['run_id'] == self.run_id and data.get('script_type') == self.script_type:
+                log(f"✓ Session loaded successfully (type: {self.script_type})")
                 chunks_data = [ChunkMetadata(**c) for c in data['chunks']]
                 
                 self.session = SessionState(
                     run_id=data['run_id'],
                     script_file=data['script_file'],
+                    script_type=data.get('script_type', self.script_type),
                     total_chunks=data['total_chunks'],
                     chunks_completed=data['chunks_completed'],
                     chunks_failed=data['chunks_failed'],
@@ -747,12 +701,13 @@ class SessionManager:
                 )
                 return self.session
             else:
-                log("⚠️ Different run_id - creating new session")
+                log(f"⚠️ Different run_id or script_type - creating new session for {self.script_type}")
         
-        log("📝 Creating new session...")
+        log(f"📝 Creating new session for {self.script_type}...")
         self.session = SessionState(
             run_id=self.run_id,
             script_file=self.script_file,
+            script_type=self.script_type,
             total_chunks=len(chunks),
             chunks_completed=0,
             chunks_failed=0,
@@ -802,9 +757,9 @@ class XTTSAudioGenerator:
     - Prevents repeated model loading
     - Chunk-level inference with immediate WAV writes
     - Memory cleanup after each chunk
-    - FIX 3: Always uses voice cloning with my_voice.wav
-    - FIX 4: Applies audio smoothing to prevent cracking
-    - FIXED: Micro-segments now capped at 600 chars (was 1200) to prevent XTTS token limit crash
+    - Always uses voice cloning with my_voice.wav
+    - Applies audio smoothing to prevent cracking
+    - Micro-segments capped at 600 chars to prevent XTTS token limit crash
     """
     
     def __init__(self, voice_preset: str = 'hi'):
@@ -814,7 +769,7 @@ class XTTSAudioGenerator:
         self.model_loaded = False
         self.heartbeat = HeartbeatLogger()
         
-        # FIX 3: Always use voice cloning
+        # Always use voice cloning
         if not os.path.exists(VOICE_CLONE_FILE):
             log(f"⚠️ WARNING: Voice clone file not found at {VOICE_CLONE_FILE}")
             log("   Please ensure voices/my_voice.wav exists for studio-quality output")
@@ -835,7 +790,7 @@ class XTTSAudioGenerator:
         log("🔄 Loading XTTS v2 model...")
         log(f"   Model: {XTTS_MODEL_NAME}")
         log(f"   Language: {self.language}")
-        log(f"   FIX 3: Using voice clone: {VOICE_CLONE_FILE if os.path.exists(VOICE_CLONE_FILE) else 'NOT FOUND'}")
+        log(f"   Using voice clone: {VOICE_CLONE_FILE if os.path.exists(VOICE_CLONE_FILE) else 'NOT FOUND'}")
         
         self.heartbeat.start("Loading XTTS v2 model...")
         
@@ -869,7 +824,7 @@ class XTTSAudioGenerator:
             log("⚠️ Model not loaded - loading now")
             self.load_model()
         
-        # FIX 1: Strictly clean text before synthesis
+        # Strictly clean text before synthesis
         clean_text = clean_text_for_synthesis(chunk.text)
         
         for attempt in range(MAX_RETRIES):
@@ -899,7 +854,7 @@ class XTTSAudioGenerator:
         """
         Generate audio with continuous heartbeat logging
         
-        FIXED: Split into smaller micro-segments (600 chars max) to prevent XTTS token limit crash
+        Split into smaller micro-segments (600 chars max) to prevent XTTS token limit crash
         Uses sentence boundary detection (। ? !) to split naturally
         
         Args:
@@ -909,9 +864,9 @@ class XTTSAudioGenerator:
         Returns:
             Audio array or None
         """
-        # FIX 2: Split into smaller micro-segments (600 chars max) to prevent XTTS token limit crash
+        # Split into smaller micro-segments (600 chars max)
         segments = self._split_into_micro_segments(text)
-        log(f"📝 Split into {len(segments)} micro-segments (FIX 2: {XTTS_MICRO_SEGMENT_CHARS} chars max each)")
+        log(f"📝 Split into {len(segments)} micro-segments (max {XTTS_MICRO_SEGMENT_CHARS} chars each)")
         
         self.heartbeat.start(f"Generating chunk {chunk_id} (0/{len(segments)} segments)")
         
@@ -928,7 +883,7 @@ class XTTSAudioGenerator:
                 
                 log(f"  🔊 Segment {i+1}/{len(segments)}: {len(segment)} chars")
                 
-                # FIX 3: Always use voice cloning with speaker_wav parameter
+                # Always use voice cloning with speaker_wav parameter
                 try:
                     # Generate audio to file first (more stable than direct array)
                     temp_file = CHUNKS_DIR / f"temp_seg_{chunk_id}_{i}.wav"
@@ -970,7 +925,7 @@ class XTTSAudioGenerator:
                 if isinstance(wav, list):
                     wav = np.array(wav, dtype=np.float32)
                 
-                # FIX 4: Apply audio smoothing
+                # Apply audio smoothing
                 if wav.dtype == np.float32:
                     # Already in float32 [-1, 1]
                     wav_float = wav
@@ -996,7 +951,7 @@ class XTTSAudioGenerator:
                     log(f"  🧹 Memory cleanup after {i+1} segments")
                     memory_cleanup()
             
-            # FIX 6: Concatenate audio chunks
+            # Concatenate audio chunks
             log(f"🔗 Concatenating {len(audio_arrays)} segments...")
             final_audio = np.concatenate(audio_arrays, axis=0)
             
@@ -1018,7 +973,7 @@ class XTTSAudioGenerator:
         """
         Split text into XTTS-safe micro-segments
         
-        FIX 2: Reduced segment size to 600 chars max (was 1200) to prevent XTTS token limit crash
+        Reduced segment size to 600 chars max to prevent XTTS token limit crash
         Splits at sentence boundaries (। ? !) to maintain natural speech flow
         
         XTTS v2 has a hard limit of 400 tokens per generation
@@ -1078,15 +1033,16 @@ class AudioStitcher:
     """Stitch multiple WAV chunks into final audio"""
     
     @staticmethod
-    def stitch_chunks(chunks: List[ChunkMetadata], output_file: Path) -> bool:
+    def stitch_chunks(chunks: List[ChunkMetadata], output_file: Path, script_type: str = 'long') -> bool:
         """
         Stitch chunk WAV files into single output
         
-        FIX 6: Ensure smooth concatenation with no gaps or pops
+        Ensure smooth concatenation with no gaps or pops
         
         Args:
             chunks: List of chunk metadata
             output_file: Output file path
+            script_type: 'long' or 'short'
             
         Returns:
             True if successful
@@ -1095,7 +1051,7 @@ class AudioStitcher:
             log("⚠️ XTTS not available - cannot stitch audio")
             return False
         
-        log("🔗 Stitching audio chunks...")
+        log(f"🔗 Stitching {script_type} audio chunks...")
         
         completed_chunks = [c for c in chunks if c.status == ChunkStatus.COMPLETED.value and c.wav_path]
         
@@ -1122,7 +1078,7 @@ class AudioStitcher:
             elif rate != expected_sample_rate:
                 log(f"⚠️ Sample rate mismatch: {rate} vs {expected_sample_rate}")
             
-            # FIX 4: Apply smoothing to each chunk before concatenation
+            # Apply smoothing to each chunk before concatenation
             audio = smooth_audio(audio)
             
             audio_segments.append(audio)
@@ -1132,7 +1088,7 @@ class AudioStitcher:
             log("❌ No audio segments loaded")
             return False
         
-        # FIX 6: Concatenate with no gaps or overlaps
+        # Concatenate with no gaps or overlaps
         log("🔗 Concatenating segments...")
         final_audio = np.concatenate(audio_segments, axis=0)
         
@@ -1141,11 +1097,11 @@ class AudioStitcher:
         
         output_file.parent.mkdir(parents=True, exist_ok=True)
         
-        # FIX 5: Enforce XTTS sample rate
+        # Enforce XTTS sample rate
         write_wav(str(output_file), XTTS_SAMPLE_RATE, final_audio)
         
         duration = len(final_audio) / XTTS_SAMPLE_RATE
-        log(f"✅ Final audio: {duration:.1f}s ({duration/60:.2f} minutes)")
+        log(f"✅ Final {script_type} audio: {duration:.1f}s ({duration/60:.2f} minutes)")
         log(f"   Saved to: {output_file}")
         
         return True
@@ -1158,12 +1114,14 @@ class AudioStitcher:
 class AudioGenerationOrchestrator:
     """
     Main orchestration layer for audio generation workflow
+    Supports both long and short scripts
     """
     
-    def __init__(self, script_file: str, run_id: str, voice_preset: str = 'hi'):
+    def __init__(self, script_file: str, run_id: str, voice_preset: str = 'hi', script_type: str = 'long'):
         self.script_file = script_file
         self.run_id = run_id
         self.voice_preset = voice_preset
+        self.script_type = script_type
         
         self.script_data: Optional[Dict] = None
         self.script_text: Optional[str] = None
@@ -1173,27 +1131,59 @@ class AudioGenerationOrchestrator:
         self.xtts_generator: Optional[XTTSAudioGenerator] = None
     
     def load_script(self):
-        """Load script from JSON file (supports old and new formats)"""
-        log(f"📖 Loading script: {self.script_file}")
+        """Load script from JSON file based on script type"""
+        log(f"📖 Loading {self.script_type} script: {self.script_file}")
+        
+        script_path = Path(self.script_file)
+        if not script_path.exists():
+            # Try default locations based on script type
+            if self.script_type == 'short':
+                default_path = OUTPUT_DIR / 'script_short.json'
+            else:
+                default_path = OUTPUT_DIR / 'script_long.json'
+            
+            if default_path.exists():
+                self.script_file = str(default_path)
+                log(f"📖 Using default location: {self.script_file}")
+            else:
+                raise FileNotFoundError(f"Script file not found: {self.script_file}")
         
         with open(self.script_file, 'r', encoding='utf-8') as f:
             self.script_data = json.load(f)
         
-        # Check for old format (single hindi_script field)
+        # Extract script text based on structure
+        if self.script_type == 'short':
+            # Shorts script structure
+            if 'script' in self.script_data:
+                script_obj = self.script_data['script']
+                # Use full_text if available, otherwise combine parts
+                if 'full_text' in script_obj:
+                    self.script_text = script_obj['full_text']
+                else:
+                    parts = []
+                    for key in ['hook', 'content', 'cta']:
+                        if key in script_obj:
+                            parts.append(script_obj[key])
+                    self.script_text = ' '.join(parts)
+            else:
+                raise ValueError("Short script missing 'script' field")
+            
+            log(f"✓ Loaded short script: {len(self.script_text)} characters")
+            return
+        
+        # Long script structure
         if 'hindi_script' in self.script_data:
             self.script_text = self.script_data['hindi_script']
             log(f"✓ Loaded script (old format): {len(self.script_text)} characters")
             return
         
-        # Check for new format (structured script sections)
         if 'script' in self.script_data:
             log("📋 Detected new structured script format")
             self.script_text = self._assemble_script_from_sections(self.script_data['script'])
             log(f"✓ Assembled script from sections: {len(self.script_text)} characters")
             return
         
-        # No valid format found
-        raise ValueError("No valid script format found in JSON (expected 'hindi_script' or 'script' field)")
+        raise ValueError("No valid script format found in JSON")
     
     def _assemble_script_from_sections(self, script_obj: Dict) -> str:
         """
@@ -1261,23 +1251,20 @@ class AudioGenerationOrchestrator:
             True if successful
         """
         log("=" * 80)
-        log("JOB A: CHUNK PREPARATION")
+        log(f"JOB A: CHUNK PREPARATION ({self.script_type.upper()})")
         log("=" * 80)
         
         self.load_script()
         
-        chunker = ScriptChunker(self.script_text)
+        chunker = ScriptChunker(self.script_text, self.script_type)
         self.chunks = chunker.chunk_script()
         
-        self.session_manager = SessionManager(self.run_id, self.script_file)
+        self.session_manager = SessionManager(self.run_id, self.script_file, self.script_type)
         self.session_manager.load_or_create_session(self.chunks, self.voice_preset)
         
-        log(f"\n✅ Chunk preparation complete!")
+        log(f"\n✅ Chunk preparation complete for {self.script_type}!")
         log(f"   Total chunks: {len(self.chunks)}")
         log(f"   Session saved to: {SESSION_FILE}")
-        log(f"\nNext steps:")
-        log(f"   1. Run JOB B for each chunk (parallel safe)")
-        log(f"   2. Run JOB C to stitch final audio")
         
         return True
     
@@ -1292,8 +1279,9 @@ class AudioGenerationOrchestrator:
             True if all chunks generated successfully
         """
         log("=" * 80)
-        log("LEGACY MODE: SEQUENTIAL CHUNK GENERATION")
-        log("⚠️ WARNING: Not recommended for videos >10 minutes")
+        log(f"LEGACY MODE: SEQUENTIAL CHUNK GENERATION ({self.script_type.upper()})")
+        if self.script_type == 'long':
+            log("⚠️ WARNING: Not recommended for videos >10 minutes")
         log("=" * 80)
         
         self.load_script()
@@ -1302,18 +1290,26 @@ class AudioGenerationOrchestrator:
             log("📂 Resuming from existing session...")
             with open(SESSION_FILE, 'r', encoding='utf-8') as f:
                 session_data = json.load(f)
-            self.chunks = [ChunkMetadata(**c) for c in session_data['chunks']]
+            
+            # Verify script type matches
+            if session_data.get('script_type') != self.script_type:
+                log(f"⚠️ Session type mismatch: expected {self.script_type}, found {session_data.get('script_type')}")
+                log("   Creating new session...")
+                chunker = ScriptChunker(self.script_text, self.script_type)
+                self.chunks = chunker.chunk_script()
+            else:
+                self.chunks = [ChunkMetadata(**c) for c in session_data['chunks']]
         else:
-            chunker = ScriptChunker(self.script_text)
+            chunker = ScriptChunker(self.script_text, self.script_type)
             self.chunks = chunker.chunk_script()
         
-        self.session_manager = SessionManager(self.run_id, self.script_file)
+        self.session_manager = SessionManager(self.run_id, self.script_file, self.script_type)
         self.session_manager.load_or_create_session(self.chunks, self.voice_preset)
         
         self.xtts_generator = XTTSAudioGenerator(self.voice_preset)
         self.xtts_generator.load_model()
         
-        log(f"\n🎬 Starting generation of {len(self.chunks)} chunks...")
+        log(f"\n🎬 Starting generation of {len(self.chunks)} chunks for {self.script_type}...")
         
         for chunk in self.chunks:
             if chunk.status == ChunkStatus.COMPLETED.value:
@@ -1327,12 +1323,18 @@ class AudioGenerationOrchestrator:
                 return False
         
         log("\n" + "=" * 80)
-        log("🔗 STITCHING FINAL AUDIO")
+        log(f"🔗 STITCHING FINAL {self.script_type.upper()} AUDIO")
         log("=" * 80)
         
-        success = AudioStitcher.stitch_chunks(self.chunks, FINAL_AUDIO_FILE)
+        # Select appropriate output file
+        if self.script_type == 'short':
+            output_file = FINAL_AUDIO_FILE_SHORT
+        else:
+            output_file = FINAL_AUDIO_FILE_LONG
         
-        if success:
+        success = AudioStitcher.stitch_chunks(self.chunks, output_file, self.script_type)
+        
+        if success and self.script_type == 'long':
             self._update_script_metadata()
         
         return success
@@ -1348,7 +1350,7 @@ class AudioGenerationOrchestrator:
             True if successful
         """
         log("=" * 80)
-        log(f"JOB B: SINGLE CHUNK GENERATION (ID: {chunk_id})")
+        log(f"JOB B: SINGLE CHUNK GENERATION ({self.script_type.upper()} ID: {chunk_id})")
         log("=" * 80)
         
         if not SESSION_FILE.exists():
@@ -1357,6 +1359,12 @@ class AudioGenerationOrchestrator:
         
         with open(SESSION_FILE, 'r', encoding='utf-8') as f:
             session_data = json.load(f)
+        
+        # Verify script type matches
+        if session_data.get('script_type') != self.script_type:
+            log(f"❌ Session type mismatch: expected {self.script_type}, found {session_data.get('script_type')}")
+            log(f"   Please use --script-type {session_data.get('script_type')}")
+            return False
         
         chunks = [ChunkMetadata(**c) for c in session_data['chunks']]
         
@@ -1370,7 +1378,11 @@ class AudioGenerationOrchestrator:
             log(f"ℹ️ Chunk {chunk_id} already completed - skipping")
             return True
         
-        self.session_manager = SessionManager(session_data['run_id'], session_data['script_file'])
+        self.session_manager = SessionManager(
+            session_data['run_id'], 
+            session_data['script_file'],
+            session_data.get('script_type', self.script_type)
+        )
         self.session_manager.session = SessionState(**session_data)
         
         self.xtts_generator = XTTSAudioGenerator(self.voice_preset)
@@ -1388,7 +1400,7 @@ class AudioGenerationOrchestrator:
         Returns:
             True if successful
         """
-        log(f"\n🎙️ Chunk {chunk.chunk_id}:")
+        log(f"\n🎙️ Chunk {chunk.chunk_id} ({self.script_type}):")
         log(f"   Estimated: {chunk.estimated_duration:.1f}s")
         log(f"   Text length: {len(chunk.text)} chars")
         log(f"   Retry count: {chunk.retries}")
@@ -1409,9 +1421,9 @@ class AudioGenerationOrchestrator:
         generation_time = time.time() - generation_start
         
         if audio_array is not None:
-            wav_path = CHUNKS_DIR / f"chunk_{chunk.chunk_id:03d}.wav"
+            wav_path = CHUNKS_DIR / f"{self.script_type}_chunk_{chunk.chunk_id:03d}.wav"
             
-            # FIX 5: Enforce XTTS sample rate
+            # Enforce XTTS sample rate
             write_wav(str(wav_path), XTTS_SAMPLE_RATE, audio_array)
             
             chunk.status = ChunkStatus.COMPLETED.value
@@ -1443,7 +1455,7 @@ class AudioGenerationOrchestrator:
             True if successful
         """
         log("=" * 80)
-        log("JOB C: AUDIO STITCHING")
+        log(f"JOB C: AUDIO STITCHING ({self.script_type.upper()})")
         log("=" * 80)
         
         if not SESSION_FILE.exists():
@@ -1453,11 +1465,22 @@ class AudioGenerationOrchestrator:
         with open(SESSION_FILE, 'r', encoding='utf-8') as f:
             session_data = json.load(f)
         
+        # Verify script type matches
+        if session_data.get('script_type') != self.script_type:
+            log(f"❌ Session type mismatch: expected {self.script_type}, found {session_data.get('script_type')}")
+            return False
+        
         chunks = [ChunkMetadata(**c) for c in session_data['chunks']]
         
-        success = AudioStitcher.stitch_chunks(chunks, FINAL_AUDIO_FILE)
+        # Select appropriate output file
+        if self.script_type == 'short':
+            output_file = FINAL_AUDIO_FILE_SHORT
+        else:
+            output_file = FINAL_AUDIO_FILE_LONG
         
-        if success:
+        success = AudioStitcher.stitch_chunks(chunks, output_file, self.script_type)
+        
+        if success and self.script_type == 'long':
             self.script_file = session_data['script_file']
             self.load_script()
             self._update_script_metadata()
@@ -1473,11 +1496,14 @@ class AudioGenerationOrchestrator:
         with open(SESSION_FILE, 'r', encoding='utf-8') as f:
             session_data = json.load(f)
         
+        script_type = session_data.get('script_type', 'unknown')
+        
         log("\n" + "=" * 80)
-        log("📊 SESSION STATUS")
+        log(f"📊 SESSION STATUS ({script_type.upper()})")
         log("=" * 80)
         log(f"Run ID: {session_data['run_id']}")
         log(f"Script: {session_data['script_file']}")
+        log(f"Script Type: {script_type}")
         log(f"Created: {session_data['created_at']}")
         log(f"Updated: {session_data['updated_at']}")
         log(f"\nProgress: {session_data['chunks_completed']}/{session_data['total_chunks']} completed")
@@ -1502,7 +1528,7 @@ class AudioGenerationOrchestrator:
     
     def _update_script_metadata(self):
         """Update script JSON with audio metadata"""
-        rate, audio = read_wav(FINAL_AUDIO_FILE)
+        rate, audio = read_wav(FINAL_AUDIO_FILE_LONG)
         duration = len(audio) / rate
         
         self.script_data['audio_info'] = {
@@ -1511,10 +1537,11 @@ class AudioGenerationOrchestrator:
             'sample_rate': rate,
             'chunks_generated': len(self.chunks),
             'voice_preset': self.voice_preset,
-            'generation_method': 'xtts_v2_pause_aware_chunked_ci_safe_studio_quality',
+            'generation_method': 'xtts_v2_sentence_based_chunking_ci_safe_studio_quality',
             'voice_clone_used': USE_VOICE_CLONE and os.path.exists(VOICE_CLONE_FILE),
             'generated_at': datetime.now().isoformat(),
             'fixes_applied': {
+                'sentence_based_chunking': True,
                 'strict_text_cleaning': True,
                 'reduced_fragmentation': True,
                 'forced_voice_cloning': True,
@@ -1542,23 +1569,26 @@ def main():
         epilog="""
 Examples:
   # JOB A: Prepare chunks (fast, <1 min)
-  python generate_audio_xtts.py --script-file script.json --run-id test_001 --prepare
+  python generate_audio.py --script-file script.json --run-id test_001 --prepare --script-type long
+  python generate_audio.py --script-file script_short.json --run-id test_001 --prepare --script-type short
   
   # JOB B: Generate specific chunk (CI matrix job)
-  python generate_audio_xtts.py --script-file script.json --run-id test_001 --chunk-id 0
-  python generate_audio_xtts.py --script-file script.json --run-id test_001 --chunk-id 1
+  python generate_audio.py --script-file script.json --run-id test_001 --chunk-id 0 --script-type long
+  python generate_audio.py --script-file script_short.json --run-id test_001 --chunk-id 0 --script-type short
   
   # JOB C: Stitch existing chunks
-  python generate_audio_xtts.py --stitch
+  python generate_audio.py --stitch --script-type long
+  python generate_audio.py --stitch --script-type short
   
   # Legacy: Generate all chunks (not CI-safe)
-  python generate_audio_xtts.py --script-file script.json --run-id test_001
+  python generate_audio.py --script-file script.json --run-id test_001 --script-type long
+  python generate_audio.py --script-file script_short.json --run-id test_001 --script-type short
   
   # Resume from existing session
-  python generate_audio_xtts.py --script-file script.json --run-id test_001 --resume
+  python generate_audio.py --script-file script.json --run-id test_001 --resume --script-type long
   
   # Check status
-  python generate_audio_xtts.py --status
+  python generate_audio.py --status
         """
     )
     
@@ -1566,6 +1596,8 @@ Examples:
     parser.add_argument('--run-id', type=str, help='Unique run identifier')
     parser.add_argument('--voice-preset', type=str, default='hi',
                        help='Voice preset/language (default: hi for Hindi)')
+    parser.add_argument('--script-type', type=str, choices=['long', 'short'], default='long',
+                       help='Script type: long (10-15 min) or short (45-60 sec)')
     
     # Mode selection
     parser.add_argument('--prepare', action='store_true',
@@ -1583,12 +1615,12 @@ Examples:
     
     # Validate arguments
     if args.status:
-        orchestrator = AudioGenerationOrchestrator('', '')
+        orchestrator = AudioGenerationOrchestrator('', '', script_type=args.script_type)
         orchestrator.print_status()
         return
     
     if args.stitch:
-        orchestrator = AudioGenerationOrchestrator('', '')
+        orchestrator = AudioGenerationOrchestrator('', '', script_type=args.script_type)
         success = orchestrator.stitch_existing_chunks()
         sys.exit(0 if success else 1)
     
@@ -1596,11 +1628,12 @@ Examples:
     if not args.script_file or not args.run_id:
         parser.error('--script-file and --run-id are required (unless using --status or --stitch)')
     
-    # Create orchestrator
+    # Create orchestrator with script type
     orchestrator = AudioGenerationOrchestrator(
         args.script_file,
         args.run_id,
-        args.voice_preset
+        args.voice_preset,
+        args.script_type
     )
     
     # Execute based on mode
