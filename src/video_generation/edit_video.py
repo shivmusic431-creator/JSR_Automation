@@ -3,6 +3,7 @@
 Video Editing - Combines clips, audio, subtitles, and overlays using FFmpeg/MoviePy
 Supports REAL-TIME WORD-LEVEL subtitles with professional rendering
 Features dynamic audio file detection and automatic clip looping to fill audio duration
+Now supports SHORTS videos with audio_short.wav (completely separate from long videos)
 """
 import os
 import json
@@ -24,16 +25,18 @@ def log(message: str):
 # DYNAMIC AUDIO FILE DETECTION
 # ============================================================================
 
-def find_latest_audio_file(output_dir="output"):
+def find_latest_audio_file(output_dir="output", video_type="long"):
     """
     Dynamically find the latest audio WAV file in the output directory
     
     Priority:
-    1. Preferred names: audio.wav, final_audio.wav
-    2. Most recently modified .wav file
+    1. For long: audio_long.wav, audio.wav, final_audio.wav
+    2. For short: audio_short.wav
+    3. Most recently modified .wav file
     
     Args:
         output_dir: Directory to search for audio files
+        video_type: 'long' or 'short'
         
     Returns:
         Path to the audio file as string
@@ -47,11 +50,18 @@ def find_latest_audio_file(output_dir="output"):
     if not output_path.exists():
         raise FileNotFoundError(f"Output directory not found: {output_dir}")
     
-    # Priority order for preferred filenames
-    preferred_names = [
-        "audio.wav",
-        "final_audio.wav"
-    ]
+    # Priority order based on video type
+    if video_type == "short":
+        preferred_names = [
+            "audio_short.wav",
+            "short_audio.wav"
+        ]
+    else:
+        preferred_names = [
+            "audio_long.wav",
+            "audio.wav",
+            "final_audio.wav"
+        ]
     
     # Check preferred names first
     for name in preferred_names:
@@ -81,6 +91,7 @@ def format_subtitle_style(video_type: str = "long") -> str:
     """
     Create FFmpeg subtitle filter with professional rendering
     NO HEAVY BLACK BACKGROUND - Uses BorderStyle=1 for clean outline only
+    DYNAMIC FONT SIZE - 48 for shorts, 28 for long videos
     
     Args:
         video_type: 'long' or 'short'
@@ -92,22 +103,20 @@ def format_subtitle_style(video_type: str = "long") -> str:
     # BorderStyle=1 = outline only (no background box)
     # Outline=2 = 2px outline for readability
     # Shadow=0 = no shadow (clean look)
+    # DYNAMIC FONT SIZE based on video type
+    font_size = "48" if video_type == "short" else "28"
+    
     base_style = (
         "FontName=Noto Sans Devanagari,"  # Hindi font support
-        "FontSize=28,"                     # Optimal size for readability
+        f"FontSize={font_size},"           # DYNAMIC: 48 for shorts, 28 for long
         "PrimaryColour=&H00FFFFFF,"        # White text
         "OutlineColour=&H00000000,"        # Black outline
         "BorderStyle=1,"                    # CRITICAL: Outline only - NO BACKGROUND BOX
         "Outline=2,"                         # 2px outline for clean definition
         "Shadow=0,"                          # NO shadow - removes heavy background
         "Alignment=10,"                      # Center alignment (matches {\an5})
-        "MarginV=40"                         # Vertical margin from bottom
+        "MarginV=60" if video_type == "short" else "MarginV=40"  # Vertical margin
     )
-    
-    if video_type == "short":
-        # Adjust for vertical video
-        base_style = base_style.replace("FontSize=28", "FontSize=36")  # Slightly larger for shorts
-        base_style = base_style.replace("MarginV=40", "MarginV=60")
     
     return base_style
 
@@ -180,22 +189,26 @@ def calculate_total_clips_duration(clips: list, clips_path: Path) -> float:
     log(f"📊 Total unique clips duration: {total_duration:.2f}s ({total_duration/60:.2f}m)")
     return total_duration, valid_clips
 
-def edit_video(video_type: str, script_file: str, audio_file: str, clips_dir: str, 
-               run_id: str, subtitles_file: str = None, hook_file: str = None, 
-               cta_file: str = None):
+def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str, 
+                      run_id: str, subtitles_file: str = None, 
+                      hook_file: str = None, cta_file: str = None):
     """
-    Edit video using FFmpeg with REAL-TIME WORD-LEVEL subtitle support
+    Edit SHORTS video using FFmpeg with REAL-TIME WORD-LEVEL subtitles
+    COMPLETELY SEPARATE from long video - uses audio_short.wav
     
     Features:
     - Professional subtitle rendering with NO black background
     - Clean outline only for readability
+    - DYNAMIC FONT SIZE: 48 for shorts
     - Perfect sync with real-time word-level subtitles
     - Automatic clip looping to fill full audio duration (NO BLACK GAPS)
+    - Hook overlay in first 3 seconds
+    - CTA overlay in last 5 seconds
+    - Final output: 58 seconds max (YouTube Shorts limit)
     
     Args:
-        video_type: 'long' or 'short'
         script_file: Path to script JSON
-        audio_file: Path to audio WAV
+        audio_file: Path to shorts audio WAV (audio_short.wav)
         clips_dir: Directory containing video clips
         run_id: Run identifier
         subtitles_file: Optional path to SRT subtitles (REAL-TIME WORD-LEVEL)
@@ -203,19 +216,428 @@ def edit_video(video_type: str, script_file: str, audio_file: str, clips_dir: st
         cta_file: Optional CTA JSON for shorts
     """
     
-    log(f"🎬 Editing {video_type} video with REAL-TIME WORD-LEVEL subtitles...")
+    log(f"🎬 Editing SHORTS video with REAL-TIME WORD-LEVEL subtitles...")
+    log(f"   DYNAMIC FONT SIZE: 48 (Shorts)")
     log(f"   Run ID: {run_id}")
     
     # Setup paths
     output_dir = Path('output/final')
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    if video_type == 'long':
-        output_file = output_dir / 'long_video.mp4'
-        target_duration = None  # Use full audio
+    output_file = output_dir / 'short_video.mp4'
+    max_duration = 58  # YouTube Shorts max is 60 seconds, using 58 for safety
+    
+    # Check audio file
+    audio_path = Path(audio_file)
+    if not audio_path.exists():
+        log(f"❌ Audio file not found: {audio_file}")
+        return None
+    
+    audio_duration = get_audio_duration(audio_file)
+    
+    # Validate shorts audio duration
+    if audio_duration > 65:
+        log(f"⚠️ WARNING: Shorts audio duration ({audio_duration:.1f}s) exceeds YouTube limit")
+        log(f"   Will trim to {max_duration}s")
+    elif audio_duration < 30:
+        log(f"⚠️ WARNING: Shorts audio duration ({audio_duration:.1f}s) is too short")
+    
+    # Load clips manifest
+    clips_path = Path(clips_dir)
+    manifest_file = clips_path / 'manifest.json'
+    
+    clips = []
+    if manifest_file.exists():
+        try:
+            with open(manifest_file, 'r', encoding='utf-8') as f:
+                manifest = json.load(f)
+                # FIX: Handle both 'filename' and 'file' keys in manifest
+                clips = []
+                for c in manifest.get('clips', []):
+                    if 'filename' in c:
+                        clips.append(c['filename'])
+                    elif 'file' in c:
+                        clips.append(c['file'])
+            log(f"📋 Loaded manifest with {len(clips)} clips")
+        except Exception as e:
+            log(f"⚠️ Error loading manifest: {e}")
+    
+    # If no clips from manifest, find all video files
+    if not clips:
+        clips = sorted([str(f) for f in clips_path.glob('*.mp4')])
+        if clips:
+            log(f"📁 Found {len(clips)} video clips in directory")
+    
+    # Build FFmpeg command
+    if not clips:
+        log("⚠️ No clips found, creating video with audio only (black background)")
+        
+        # Create video from audio with black background
+        cmd = [
+            'ffmpeg', '-y',
+            '-f', 'lavfi', '-i', f'color=c=black:s=1080x1920:d={audio_duration}',
+            '-i', audio_file,
+            '-t', str(max_duration),  # Hard limit for shorts
+            '-c:v', 'libx264', '-preset', 'medium',
+            '-c:a', 'aac', '-b:a', '192k',
+            '-pix_fmt', 'yuv420p',
+            '-r', '30'
+        ]
+        
+        # Add video filters
+        video_filters = []
+        
+        # =========================================================
+        # CORRECT FILTER ORDER: SCALE → SUBTITLES → HOOK → CTA
+        # =========================================================
+        
+        # FIRST: Scaling for shorts (1080x1920 vertical)
+        video_filters.append(
+            "scale=1080:1920:force_original_aspect_ratio=decrease,"
+            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,"
+            "format=yuv420p"
+        )
+        
+        # SECOND: PROFESSIONAL SUBTITLES with NO black background
+        if subtitles_file and Path(subtitles_file).exists():
+            # Verify center alignment
+            verify_subtitle_center_alignment(Path(subtitles_file))
+            
+            # PROFESSIONAL STYLE with DYNAMIC FONT SIZE
+            subtitle_style = format_subtitle_style('short')
+            video_filters.append(f"subtitles={subtitles_file}:force_style='{subtitle_style}'")
+            log(f"📝 Adding PROFESSIONAL subtitles with NO black background (FontSize: 48)")
+        
+        # THIRD: Hook overlay (first 3 seconds)
+        if hook_file and Path(hook_file).exists():
+            try:
+                with open(hook_file, 'r', encoding='utf-8') as f:
+                    hook_data = json.load(f)
+                hook = hook_data.get('hook_options', [{}])[0]
+                # FIX: Handle emojis and special characters in hook text
+                hook_text = hook.get('text_overlay', '')
+                # Remove emojis and unsupported characters
+                hook_text = re.sub(r'[^\w\s.,!?-]', '', hook_text)
+                # Escape FFmpeg special characters
+                hook_text = hook_text.replace("'", "\\'").replace(":", "\\:")
+                if hook_text:
+                    video_filters.append(
+                        f"drawtext=fontfile=/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf:"
+                        f"text='{hook_text}':"
+                        "fontcolor=yellow:"
+                        "fontsize=72:"
+                        "x=(w-text_w)/2:"
+                        "y=h*0.2:"
+                        "enable='between(t,0,3)':"
+                        "borderw=4:bordercolor=black"
+                    )
+                    log(f"🪝 Hook overlay added: {hook_text}")
+            except Exception as e:
+                log(f"⚠️ Hook overlay failed: {e}")
+        
+        # FOURTH: CTA overlay (last 5 seconds)
+        if cta_file and Path(cta_file).exists():
+            try:
+                with open(cta_file, 'r', encoding='utf-8') as f:
+                    cta_data = json.load(f)
+                cta = cta_data.get('cta_options', [{}])[0]
+                # FIX: Handle emojis and special characters in CTA text
+                cta_text = cta.get('text_overlay', '')
+                # Remove emojis and unsupported characters
+                cta_text = re.sub(r'[^\w\s.,!?-]', '', cta_text)
+                # Escape FFmpeg special characters
+                cta_text = cta_text.replace("'", "\\'").replace(":", "\\:")
+                if cta_text:
+                    # Calculate start time for CTA (last 5 seconds of max duration)
+                    cta_start = max(0, max_duration - 5)
+                    video_filters.append(
+                        f"drawtext=fontfile=/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf:"
+                        f"text='{cta_text}':"
+                        "fontcolor=white:"
+                        "fontsize=60:"
+                        "x=(w-text_w)/2:"
+                        "y=h*0.8:"
+                        f"enable='gte(t,{cta_start})':"
+                        "borderw=4:bordercolor=black"
+                    )
+                    log(f"📢 CTA overlay added: {cta_text}")
+            except Exception as e:
+                log(f"⚠️ CTA overlay failed: {e}")
+        
+        # Apply video filters if any
+        if video_filters:
+            cmd.extend(['-vf', ','.join(video_filters)])
+        
+        cmd.append(str(output_file))
+        
     else:
-        output_file = output_dir / 'short_video.mp4'
-        target_duration = 58  # Shorts max is 60 seconds
+        # ====================================================================
+        # STEP 1: Calculate total duration of all unique clips
+        # ====================================================================
+        log("📊 Analyzing clip durations...")
+        total_clips_duration, valid_clips = calculate_total_clips_duration(clips, clips_path)
+        
+        if not valid_clips:
+            log("❌ No valid clips found")
+            return None
+        
+        # ====================================================================
+        # STEP 2: Calculate required loop count to fill audio duration
+        # ====================================================================
+        # Use audio duration with max limit
+        target_duration = min(audio_duration, max_duration)
+        
+        # Calculate loops needed (ceil to ensure we cover full duration)
+        loop_count = math.ceil(target_duration / total_clips_duration)
+        
+        log(f"🔄 Audio duration: {audio_duration:.2f}s")
+        log(f"🔄 Target duration (with max limit): {target_duration:.2f}s")
+        log(f"🔄 Total clips duration (one cycle): {total_clips_duration:.2f}s")
+        log(f"🔄 Loop count needed: {loop_count} ({(loop_count * total_clips_duration):.2f}s total video)")
+        
+        # ====================================================================
+        # STEP 3: Generate concat file with repeated clips
+        # ====================================================================
+        concat_file = output_dir / 'shorts_concat.txt'
+        abs_clips = []
+        
+        with open(concat_file, 'w', encoding='utf-8') as f:
+            # Write clips in loop_count cycles to fill audio duration
+            for cycle in range(loop_count):
+                for clip in valid_clips:
+                    clip_path = Path(clip)
+                    abs_path = str(clip_path.absolute())
+                    f.write(f"file '{abs_path}'\n")
+                    abs_clips.append(abs_path)
+            
+            log(f"🔁 Created concat file with {len(abs_clips)} total entries ({loop_count} cycles of {len(valid_clips)} clips)")
+        
+        log(f"📋 Total video duration with loops: {(loop_count * total_clips_duration):.2f}s")
+        
+        # Base FFmpeg command
+        cmd = [
+            'ffmpeg', '-y',
+            '-f', 'concat', '-safe', '0', '-i', str(concat_file),
+            '-i', audio_file,
+            '-t', str(max_duration),  # Hard limit for shorts
+            '-c:v', 'libx264', '-preset', 'medium',
+            '-c:a', 'aac', '-b:a', '192k',
+            '-shortest',
+            '-pix_fmt', 'yuv420p',
+            '-r', '30'
+        ]
+        
+        # Add video filters
+        video_filters = []
+        
+        # =========================================================
+        # CORRECT FILTER ORDER: SCALE → SUBTITLES → HOOK → CTA
+        # =========================================================
+        
+        # FIRST: Scaling for shorts (1080x1920 vertical)
+        video_filters.append(
+            "scale=1080:1920:force_original_aspect_ratio=decrease,"
+            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,"
+            "format=yuv420p"
+        )
+        
+        # SECOND: PROFESSIONAL SUBTITLES with NO black background
+        if subtitles_file and Path(subtitles_file).exists():
+            # Verify center alignment
+            verify_subtitle_center_alignment(Path(subtitles_file))
+            
+            # PROFESSIONAL STYLE with DYNAMIC FONT SIZE
+            subtitle_style = format_subtitle_style('short')
+            video_filters.append(f"subtitles={subtitles_file}:force_style='{subtitle_style}'")
+            log(f"📝 Adding PROFESSIONAL subtitles with NO black background (FontSize: 48)")
+        
+        # THIRD: Hook overlay (first 3 seconds)
+        if hook_file and Path(hook_file).exists():
+            try:
+                with open(hook_file, 'r', encoding='utf-8') as f:
+                    hook_data = json.load(f)
+                hook = hook_data.get('hook_options', [{}])[0]
+                # FIX: Handle emojis and special characters in hook text
+                hook_text = hook.get('text_overlay', '')
+                # Remove emojis and unsupported characters
+                hook_text = re.sub(r'[^\w\s.,!?-]', '', hook_text)
+                # Escape FFmpeg special characters
+                hook_text = hook_text.replace("'", "\\'").replace(":", "\\:")
+                if hook_text:
+                    video_filters.append(
+                        f"drawtext=fontfile=/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf:"
+                        f"text='{hook_text}':"
+                        "fontcolor=yellow:"
+                        "fontsize=72:"
+                        "x=(w-text_w)/2:"
+                        "y=h*0.2:"
+                        "enable='between(t,0,3)':"
+                        "borderw=4:bordercolor=black"
+                    )
+                    log(f"🪝 Hook overlay added: {hook_text}")
+            except Exception as e:
+                log(f"⚠️ Hook overlay failed: {e}")
+        
+        # FOURTH: CTA overlay (last 5 seconds)
+        if cta_file and Path(cta_file).exists():
+            try:
+                with open(cta_file, 'r', encoding='utf-8') as f:
+                    cta_data = json.load(f)
+                cta = cta_data.get('cta_options', [{}])[0]
+                # FIX: Handle emojis and special characters in CTA text
+                cta_text = cta.get('text_overlay', '')
+                # Remove emojis and unsupported characters
+                cta_text = re.sub(r'[^\w\s.,!?-]', '', cta_text)
+                # Escape FFmpeg special characters
+                cta_text = cta_text.replace("'", "\\'").replace(":", "\\:")
+                if cta_text:
+                    # Calculate start time for CTA (last 5 seconds)
+                    cta_start = max(0, max_duration - 5)
+                    video_filters.append(
+                        f"drawtext=fontfile=/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf:"
+                        f"text='{cta_text}':"
+                        "fontcolor=white:"
+                        "fontsize=60:"
+                        "x=(w-text_w)/2:"
+                        "y=h*0.8:"
+                        f"enable='gte(t,{cta_start})':"
+                        "borderw=4:bordercolor=black"
+                    )
+                    log(f"📢 CTA overlay added: {cta_text}")
+            except Exception as e:
+                log(f"⚠️ CTA overlay failed: {e}")
+        
+        # Apply video filters if any
+        if video_filters:
+            cmd.extend(['-vf', ','.join(video_filters)])
+        
+        cmd.append(str(output_file))
+    
+    # Log command (truncated for readability)
+    log(f"🎬 Running FFmpeg command for SHORTS video...")
+    cmd_str = ' '.join(str(c) for c in cmd)
+    if len(cmd_str) > 500:
+        log(f"   Command: {cmd_str[:500]}... [truncated]")
+    else:
+        log(f"   Command: {cmd_str}")
+    
+    try:
+        # Run FFmpeg with real-time output
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1
+        )
+        
+        # Monitor progress
+        while True:
+            output = process.stderr.readline()
+            if output == '' and process.poll() is not None:
+                break
+            if output:
+                # Log only important messages (every 10% progress)
+                if 'time=' in output:
+                    # Extract time for progress tracking
+                    time_match = re.search(r'time=(\d+:\d+:\d+\.\d+)', output)
+                    if time_match:
+                        log(f"⏱️ Progress: {time_match.group(1)}")
+        
+        returncode = process.poll()
+        
+        if returncode == 0:
+            log(f"✅ SHORTS video edited successfully with REAL-TIME WORD-LEVEL subtitles: {output_file}")
+            
+            # Get final video info
+            info_cmd = [
+                'ffprobe', '-v', 'error',
+                '-show_entries', 'format=duration,size',
+                '-of', 'default=noprint_wrappers=1:nokey=1',
+                str(output_file)
+            ]
+            info_result = subprocess.run(info_cmd, capture_output=True, text=True)
+            
+            if info_result.returncode == 0:
+                lines = info_result.stdout.strip().split('\n')
+                if len(lines) >= 2:
+                    duration = float(lines[0])
+                    size_bytes = int(lines[1])
+                    size_mb = size_bytes / (1024 * 1024)
+                    
+                    log(f"⏱️ Video duration: {duration:.2f}s")
+                    log(f"💾 File size: {size_mb:.2f} MB")
+                    
+                    # Save metadata
+                    metadata = {
+                        'video_type': 'short',
+                        'duration_seconds': duration,
+                        'duration_formatted': f"{int(duration//60)}:{int(duration%60):02d}",
+                        'file_size_mb': size_mb,
+                        'subtitles_included': subtitles_file and Path(subtitles_file).exists(),
+                        'subtitles_type': 'REAL-TIME WORD-LEVEL',
+                        'subtitles_center_aligned': True,
+                        'subtitles_font': 'Noto Sans Devanagari',
+                        'subtitles_font_size': 48,
+                        'subtitles_style': 'BorderStyle=1 (outline only, no background)',
+                        'hook_included': hook_file and Path(hook_file).exists(),
+                        'cta_included': cta_file and Path(cta_file).exists(),
+                        'audio_file': audio_file,
+                        'audio_duration': audio_duration,
+                        'clips_used': len(valid_clips) if clips else 0,
+                        'loop_count': loop_count if clips else 1,
+                        'total_clips_duration': total_clips_duration if clips else 0,
+                        'output_file': str(output_file)
+                    }
+                    
+                    meta_file = output_dir / 'short_metadata.json'
+                    with open(meta_file, 'w', encoding='utf-8') as f:
+                        json.dump(metadata, f, indent=2)
+            
+            return output_file
+        else:
+            # Get error output
+            _, stderr = process.communicate()
+            log(f"❌ FFmpeg failed with code {returncode}")
+            if stderr:
+                log(f"Error: {stderr[-500:]}")  # Last 500 chars of error
+            return None
+            
+    except Exception as e:
+        log(f"❌ Video editing failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+def edit_long_video(script_file: str, audio_file: str, clips_dir: str, 
+                    run_id: str, subtitles_file: str = None):
+    """
+    Edit LONG video using FFmpeg with REAL-TIME WORD-LEVEL subtitles
+    
+    Features:
+    - Professional subtitle rendering with NO black background
+    - Clean outline only for readability
+    - DYNAMIC FONT SIZE: 28 for long videos
+    - Perfect sync with real-time word-level subtitles
+    - Automatic clip looping to fill full audio duration (NO BLACK GAPS)
+    
+    Args:
+        script_file: Path to script JSON
+        audio_file: Path to audio WAV (audio_long.wav)
+        clips_dir: Directory containing video clips
+        run_id: Run identifier
+        subtitles_file: Optional path to SRT subtitles (REAL-TIME WORD-LEVEL)
+    """
+    
+    log(f"🎬 Editing LONG video with REAL-TIME WORD-LEVEL subtitles...")
+    log(f"   DYNAMIC FONT SIZE: 28 (Long)")
+    log(f"   Run ID: {run_id}")
+    
+    # Setup paths
+    output_dir = Path('output/final')
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    output_file = output_dir / 'long_video.mp4'
     
     # Check audio file
     audio_path = Path(audio_file)
@@ -271,81 +693,25 @@ def edit_video(video_type: str, script_file: str, audio_file: str, clips_dir: st
         video_filters = []
         
         # =========================================================
-        # CORRECT FILTER ORDER: SCALE → SUBTITLES → HOOK → CTA
+        # CORRECT FILTER ORDER: SCALE → SUBTITLES
         # =========================================================
         
-        # FIRST: Scaling (for shorts)
-        if video_type == 'short':
-            # Proper vertical scaling with padding
-            video_filters.append(
-                "scale=1080:1920:force_original_aspect_ratio=decrease,"
-                "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,"
-                "format=yuv420p"
-            )
+        # FIRST: Scaling for long videos (1080p landscape)
+        video_filters.append(
+            "scale=1920:1080:force_original_aspect_ratio=decrease,"
+            "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,"
+            "format=yuv420p"
+        )
         
         # SECOND: PROFESSIONAL SUBTITLES with NO black background
         if subtitles_file and Path(subtitles_file).exists():
             # Verify center alignment
             verify_subtitle_center_alignment(Path(subtitles_file))
             
-            # PROFESSIONAL STYLE: BorderStyle=1 for outline only (NO background box)
-            subtitle_style = format_subtitle_style(video_type)
+            # PROFESSIONAL STYLE with DYNAMIC FONT SIZE
+            subtitle_style = format_subtitle_style('long')
             video_filters.append(f"subtitles={subtitles_file}:force_style='{subtitle_style}'")
-            log("📝 Adding PROFESSIONAL subtitles with NO black background")
-        
-        # THIRD: Hook overlay (first 3 seconds)
-        if video_type == 'short' and hook_file and Path(hook_file).exists():
-            try:
-                with open(hook_file, 'r', encoding='utf-8') as f:
-                    hook_data = json.load(f)
-                hook = hook_data.get('hook_options', [{}])[0]
-                # FIX: Handle emojis and special characters in hook text
-                hook_text = hook.get('text_overlay', '')
-                # Remove emojis and unsupported characters
-                hook_text = re.sub(r'[^\w\s.,!?-]', '', hook_text)
-                # Escape FFmpeg special characters
-                hook_text = hook_text.replace("'", "\\'").replace(":", "\\:")
-                if hook_text:
-                    video_filters.append(
-                        f"drawtext=fontfile=/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf:"
-                        f"text='{hook_text}':"
-                        "fontcolor=yellow:"
-                        "fontsize=72:"
-                        "x=(w-text_w)/2:"
-                        "y=h*0.2:"
-                        "enable='between(t,0,3)':"
-                        "borderw=4:bordercolor=black"
-                    )
-                    log(f"🪝 Hook overlay added: {hook_text}")
-            except Exception as e:
-                log(f"⚠️ Hook overlay failed: {e}")
-        
-        # FOURTH: CTA overlay (last 5 seconds)
-        if video_type == 'short' and cta_file and Path(cta_file).exists():
-            try:
-                with open(cta_file, 'r', encoding='utf-8') as f:
-                    cta_data = json.load(f)
-                cta = cta_data.get('cta_options', [{}])[0]
-                # FIX: Handle emojis and special characters in CTA text
-                cta_text = cta.get('text_overlay', '')
-                # Remove emojis and unsupported characters
-                cta_text = re.sub(r'[^\w\s.,!?-]', '', cta_text)
-                # Escape FFmpeg special characters
-                cta_text = cta_text.replace("'", "\\'").replace(":", "\\:")
-                if cta_text:
-                    video_filters.append(
-                        f"drawtext=fontfile=/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf:"
-                        f"text='{cta_text}':"
-                        "fontcolor=white:"
-                        "fontsize=60:"
-                        "x=(w-text_w)/2:"
-                        "y=h*0.8:"
-                        "enable='gte(t,53)':"
-                        "borderw=4:bordercolor=black"
-                    )
-                    log(f"📢 CTA overlay added: {cta_text}")
-            except Exception as e:
-                log(f"⚠️ CTA overlay failed: {e}")
+            log(f"📝 Adding PROFESSIONAL subtitles with NO black background (FontSize: 28)")
         
         # Apply video filters if any
         if video_filters:
@@ -367,7 +733,7 @@ def edit_video(video_type: str, script_file: str, audio_file: str, clips_dir: st
         # ====================================================================
         # STEP 2: Calculate required loop count to fill audio duration
         # ====================================================================
-        # Use audio_duration directly (for shorts, target_duration is handled separately)
+        # Use audio_duration directly
         target_duration = audio_duration
         
         # Calculate loops needed (ceil to ensure we cover full duration)
@@ -380,7 +746,7 @@ def edit_video(video_type: str, script_file: str, audio_file: str, clips_dir: st
         # ====================================================================
         # STEP 3: Generate concat file with repeated clips
         # ====================================================================
-        concat_file = output_dir / 'concat.txt'
+        concat_file = output_dir / 'long_concat.txt'
         abs_clips = []
         
         with open(concat_file, 'w', encoding='utf-8') as f:
@@ -412,85 +778,25 @@ def edit_video(video_type: str, script_file: str, audio_file: str, clips_dir: st
         video_filters = []
         
         # =========================================================
-        # CORRECT FILTER ORDER: SCALE → SUBTITLES → HOOK → CTA
+        # CORRECT FILTER ORDER: SCALE → SUBTITLES
         # =========================================================
         
-        # FIRST: Scaling (for shorts)
-        if video_type == 'short':
-            # Proper vertical scaling with padding
-            video_filters.append(
-                "scale=1080:1920:force_original_aspect_ratio=decrease,"
-                "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,"
-                "format=yuv420p"
-            )
+        # FIRST: Scaling for long videos (1080p landscape)
+        video_filters.append(
+            "scale=1920:1080:force_original_aspect_ratio=decrease,"
+            "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,"
+            "format=yuv420p"
+        )
         
         # SECOND: PROFESSIONAL SUBTITLES with NO black background
         if subtitles_file and Path(subtitles_file).exists():
             # Verify center alignment
             verify_subtitle_center_alignment(Path(subtitles_file))
             
-            # PROFESSIONAL STYLE: BorderStyle=1 for outline only (NO background box)
-            subtitle_style = format_subtitle_style(video_type)
+            # PROFESSIONAL STYLE with DYNAMIC FONT SIZE
+            subtitle_style = format_subtitle_style('long')
             video_filters.append(f"subtitles={subtitles_file}:force_style='{subtitle_style}'")
-            log("📝 Adding PROFESSIONAL subtitles with NO black background")
-        
-        # THIRD: Hook overlay (first 3 seconds)
-        if video_type == 'short' and hook_file and Path(hook_file).exists():
-            try:
-                with open(hook_file, 'r', encoding='utf-8') as f:
-                    hook_data = json.load(f)
-                hook = hook_data.get('hook_options', [{}])[0]
-                # FIX: Handle emojis and special characters in hook text
-                hook_text = hook.get('text_overlay', '')
-                # Remove emojis and unsupported characters
-                hook_text = re.sub(r'[^\w\s.,!?-]', '', hook_text)
-                # Escape FFmpeg special characters
-                hook_text = hook_text.replace("'", "\\'").replace(":", "\\:")
-                if hook_text:
-                    video_filters.append(
-                        f"drawtext=fontfile=/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf:"
-                        f"text='{hook_text}':"
-                        "fontcolor=yellow:"
-                        "fontsize=72:"
-                        "x=(w-text_w)/2:"
-                        "y=h*0.2:"
-                        "enable='between(t,0,3)':"
-                        "borderw=4:bordercolor=black"
-                    )
-                    log(f"🪝 Hook overlay added: {hook_text}")
-            except Exception as e:
-                log(f"⚠️ Hook overlay failed: {e}")
-        
-        # FOURTH: CTA overlay (last 5 seconds)
-        if video_type == 'short' and cta_file and Path(cta_file).exists():
-            try:
-                with open(cta_file, 'r', encoding='utf-8') as f:
-                    cta_data = json.load(f)
-                cta = cta_data.get('cta_options', [{}])[0]
-                # FIX: Handle emojis and special characters in CTA text
-                cta_text = cta.get('text_overlay', '')
-                # Remove emojis and unsupported characters
-                cta_text = re.sub(r'[^\w\s.,!?-]', '', cta_text)
-                # Escape FFmpeg special characters
-                cta_text = cta_text.replace("'", "\\'").replace(":", "\\:")
-                if cta_text:
-                    video_filters.append(
-                        f"drawtext=fontfile=/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf:"
-                        f"text='{cta_text}':"
-                        "fontcolor=white:"
-                        "fontsize=60:"
-                        "x=(w-text_w)/2:"
-                        "y=h*0.8:"
-                        "enable='gte(t,53)':"
-                        "borderw=4:bordercolor=black"
-                    )
-                    log(f"📢 CTA overlay added: {cta_text}")
-            except Exception as e:
-                log(f"⚠️ CTA overlay failed: {e}")
-        
-        # Hard limit duration to 58 seconds for shorts
-        if video_type == 'short':
-            cmd.extend(['-t', '58'])
+            log(f"📝 Adding PROFESSIONAL subtitles with NO black background (FontSize: 28)")
         
         # Apply video filters if any
         if video_filters:
@@ -499,7 +805,7 @@ def edit_video(video_type: str, script_file: str, audio_file: str, clips_dir: st
         cmd.append(str(output_file))
     
     # Log command (truncated for readability)
-    log(f"🎬 Running FFmpeg command with PROFESSIONAL subtitle rendering...")
+    log(f"🎬 Running FFmpeg command for LONG video...")
     cmd_str = ' '.join(str(c) for c in cmd)
     if len(cmd_str) > 500:
         log(f"   Command: {cmd_str[:500]}... [truncated]")
@@ -525,7 +831,6 @@ def edit_video(video_type: str, script_file: str, audio_file: str, clips_dir: st
                 # Log only important messages (every 10% progress)
                 if 'time=' in output:
                     # Extract time for progress tracking
-                    import re
                     time_match = re.search(r'time=(\d+:\d+:\d+\.\d+)', output)
                     if time_match:
                         log(f"⏱️ Progress: {time_match.group(1)}")
@@ -533,7 +838,7 @@ def edit_video(video_type: str, script_file: str, audio_file: str, clips_dir: st
         returncode = process.poll()
         
         if returncode == 0:
-            log(f"✅ Video edited successfully with REAL-TIME WORD-LEVEL subtitles: {output_file}")
+            log(f"✅ LONG video edited successfully with REAL-TIME WORD-LEVEL subtitles: {output_file}")
             
             # Get final video info
             info_cmd = [
@@ -556,7 +861,7 @@ def edit_video(video_type: str, script_file: str, audio_file: str, clips_dir: st
                     
                     # Save metadata
                     metadata = {
-                        'video_type': video_type,
+                        'video_type': 'long',
                         'duration_seconds': duration,
                         'duration_formatted': f"{int(duration//60)}:{int(duration%60):02d}",
                         'file_size_mb': size_mb,
@@ -564,17 +869,17 @@ def edit_video(video_type: str, script_file: str, audio_file: str, clips_dir: st
                         'subtitles_type': 'REAL-TIME WORD-LEVEL',
                         'subtitles_center_aligned': True,
                         'subtitles_font': 'Noto Sans Devanagari',
+                        'subtitles_font_size': 28,
                         'subtitles_style': 'BorderStyle=1 (outline only, no background)',
-                        'hook_included': hook_file and Path(hook_file).exists() and video_type == 'short',
-                        'cta_included': cta_file and Path(cta_file).exists() and video_type == 'short',
                         'audio_file': audio_file,
+                        'audio_duration': audio_duration,
                         'clips_used': len(valid_clips) if clips else 0,
                         'loop_count': loop_count if clips else 1,
                         'total_clips_duration': total_clips_duration if clips else 0,
                         'output_file': str(output_file)
                     }
                     
-                    meta_file = output_dir / f'{video_type}_metadata.json'
+                    meta_file = output_dir / 'long_metadata.json'
                     with open(meta_file, 'w', encoding='utf-8') as f:
                         json.dump(metadata, f, indent=2)
             
@@ -620,7 +925,6 @@ def verify_subtitles(subtitles_file: Path) -> bool:
         log(f"📝 Subtitle file contains {subtitle_count} REAL-TIME subtitles")
         
         # Quick check for word-level granularity (more subtitles than typical)
-        # This is just informational, not a validation requirement
         if subtitle_count > 50:
             log(f"✅ High subtitle count ({subtitle_count}) indicates word-level granularity")
         
@@ -655,13 +959,14 @@ def main():
     
     log("=" * 80)
     log(f"🎬 VIDEO EDITING PIPELINE WITH REAL-TIME WORD-LEVEL SUBTITLES - {args.type.upper()}")
+    log(f"   DYNAMIC FONT SIZE: {'48 (Shorts)' if args.type == 'short' else '28 (Long)'}")
     log("=" * 80)
     
     # Step 1: Dynamically find audio file if not specified
     if args.audio_file is None:
         try:
-            audio_file = find_latest_audio_file(args.audio_dir)
-            log(f"🎯 Auto-detected audio file: {audio_file}")
+            audio_file = find_latest_audio_file(args.audio_dir, args.type)
+            log(f"🎯 Auto-detected {args.type} audio file: {audio_file}")
         except FileNotFoundError as e:
             log(f"❌ {e}")
             sys.exit(1)
@@ -695,17 +1000,25 @@ def main():
         log("ℹ️ No subtitles file found, proceeding without subtitles")
         args.subtitles_file = None
     
-    # Edit video
-    output_file = edit_video(
-        args.type,
-        args.script_file,
-        audio_file,
-        args.clips_dir,
-        args.run_id,
-        args.subtitles_file,
-        args.hook_file,
-        args.cta_file
-    )
+    # Edit video based on type
+    if args.type == 'short':
+        output_file = edit_shorts_video(
+            args.script_file,
+            audio_file,
+            args.clips_dir,
+            args.run_id,
+            args.subtitles_file,
+            args.hook_file,
+            args.cta_file
+        )
+    else:
+        output_file = edit_long_video(
+            args.script_file,
+            audio_file,
+            args.clips_dir,
+            args.run_id,
+            args.subtitles_file
+        )
     
     if output_file:
         log(f"✅ {args.type.upper()} video with REAL-TIME WORD-LEVEL subtitles created successfully")
