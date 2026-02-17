@@ -324,7 +324,7 @@ jobs:
             --run-id "$RUN_ID" \
             --status "${{ job.status }}"
 
-  # Phase 3: Subtitle Generation (runs after both audio files are ready)
+  # Phase 3: Subtitle Generation (SCRIPT-BASED - NO VOSK)
   generate-subtitles:
     runs-on: ubuntu-latest
     needs: [generate-audio-long, generate-audio-short]
@@ -344,12 +344,11 @@ jobs:
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg fonts-noto fonts-noto-core fonts-noto-extra fonts-noto-ui-core fonts-noto-ui-extra
 
       - name: Install Python Dependencies
         run: |
           pip install -r src/video_generation/requirements.txt
-          pip install vosk>=0.3.45
 
       - name: Download ${{ matrix.audio-type }} Audio Artifact
         uses: actions/download-artifact@v4
@@ -357,35 +356,30 @@ jobs:
           name: audio-${{ matrix.audio-type }}-${{ env.RUN_ID }}
           path: output/
 
-      - name: Cache Vosk Hindi Model
-        id: cache-vosk
-        uses: actions/cache@v4
+      - name: Download ${{ matrix.audio-type }} Script Artifact
+        uses: actions/download-artifact@v4
         with:
-          path: models/vosk-model-hi-0.22
-          key: vosk-model-hi-0.22-${{ runner.os }}-v1
-          restore-keys: |
-            vosk-model-hi-0.22-
+          name: script-${{ matrix.audio-type }}-${{ env.RUN_ID }}
+          path: output/
 
-      - name: Download Vosk Hindi Model (if not cached)
-        if: steps.cache-vosk.outputs.cache-hit != 'true'
-        run: |
-          chmod +x scripts/download_vosk_model.sh
-          ./scripts/download_vosk_model.sh
-
-      - name: Generate ${{ matrix.audio-type }} Subtitles
+      - name: Generate ${{ matrix.audio-type }} Subtitles (SCRIPT-BASED - NO VOSK)
         env:
           RUN_ID: ${{ env.RUN_ID }}
         run: |
           if [ "${{ matrix.audio-type }}" == "long" ]; then
+            SCRIPT_FILE="output/script_long.json"
             AUDIO_FILE="output/audio_long.wav"
             OUTPUT_FILE="output/subtitles_long.srt"
           else
+            SCRIPT_FILE="output/script_short.json"
             AUDIO_FILE="output/audio_short.wav"
             OUTPUT_FILE="output/subtitles_short.srt"
           fi
           
+          echo "⚡ Generating ${{ matrix.audio-type }} subtitles using SCRIPT-BASED method (NO SPEECH RECOGNITION)"
           python src/video_generation/generate_subtitles.py \
             --run-id "$RUN_ID" \
+            --script-file "$SCRIPT_FILE" \
             --audio-file "$AUDIO_FILE" \
             --output-file "$OUTPUT_FILE"
 
