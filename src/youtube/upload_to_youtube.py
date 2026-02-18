@@ -230,27 +230,46 @@ class YouTubeUploader:
         return None
     
     def _prepare_video_metadata(self, video_type: str, scheduled_time: str) -> Dict:
-        """Prepare metadata for video upload"""
-        script_data = self._load_json_file('script.json')
-        thumbnail_path = self.files_dir / 'thumbnail.jpg'
+        """Prepare metadata for video upload with robust extraction from script.json"""
+        # Load script data safely
+        script_data = self._load_json_file('script.json') or {}
         
+        # Extract metadata from nested structure
+        metadata = script_data.get('metadata', {})
+        
+        # Get title with fallback chain
+        title = metadata.get('final_title')
+        if not title:
+            title = metadata.get('title')
+        if not title:
+            title = f'{video_type.title()} Video'
+            logger.warning(f"⚠️ No title found in script.json, using fallback: {title}")
+        
+        # Get description with fallback chain
+        description = metadata.get('description', '')
+        if not description:
+            description = metadata.get('description_hook', '')
+        if not description:
+            description = f'{title}'
+            logger.warning(f"⚠️ No description found in script.json, using title as fallback")
+        
+        # Check for thumbnail
+        thumbnail_path = self.files_dir / 'thumbnail.jpg'
         if not thumbnail_path.exists():
             thumbnail_path = next(self.files_dir.glob('thumbnail*.jpg'), None)
-        
-        # Basic metadata
-        title = script_data.get('title', f'{video_type.title()} Video') if script_data else f'{video_type.title()} Video'
-        description = script_data.get('description', '') if script_data else ''
         
         # Add long video link for short video
         if video_type == 'short' and self.long_video_id:
             description += f"\n\nWatch Full Video: https://youtube.com/watch?v={self.long_video_id}"
+            logger.info(f"🔗 Added long video link to short description")
         
+        # Return complete metadata structure for YouTube API
         return {
             'snippet': {
                 'title': title,
                 'description': description,
                 'categoryId': '27',  # Education
-                'defaultLanguage': 'en'
+                'defaultLanguage': 'hi'  # Hindi
             },
             'status': {
                 'privacyStatus': 'private',
