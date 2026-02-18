@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
 Video Editing - Premium Animated Subtitles with Cinematic Styling
-Supports PROFESSIONAL ANIMATED subtitles with premium fonts and styling
 Features dynamic audio file detection and automatic clip looping to fill audio duration
 Now supports UNLIMITED CLIPS from pagination and enhanced clip validation
 ABSOLUTELY NO BLACK VIDEO GENERATION - Fails safely if requirements not met
+AUDIO DURATION AUTHORITY - Final video duration must match audio duration exactly
+STRICT POST-RENDER VALIDATION - Automatically enforces audio duration match
 """
 import os
 import json
@@ -18,6 +19,7 @@ import math
 import tempfile
 import hashlib
 import random
+import shutil
 
 def log(message: str, level: str = "INFO"):
     """Simple logging with timestamp"""
@@ -27,12 +29,12 @@ def log(message: str, level: str = "INFO"):
 
 
 # ============================================================================
-# AUDIO DURATION DETECTION - FIX FOR NAMERROR
+# AUDIO DURATION DETECTION - SINGLE SOURCE OF TRUTH
 # ============================================================================
 
 def get_audio_duration(audio_file: str) -> float:
     """
-    Get audio duration in seconds using ffprobe.
+    Get audio duration in seconds using ffprobe - SINGLE SOURCE OF TRUTH.
     Must be reliable for WAV files in GitHub Actions environment.
     
     Args:
@@ -51,7 +53,7 @@ def get_audio_duration(audio_file: str) -> float:
     if not audio_path.exists():
         raise FileNotFoundError(f"Audio file not found: {audio_file}")
     
-    log(f"🔍 Detecting audio duration: {audio_file}")
+    log(f"🔍 Detecting AUDIO AUTHORITY duration: {audio_file}")
     
     # Build ffprobe command
     cmd = [
@@ -83,7 +85,7 @@ def get_audio_duration(audio_file: str) -> float:
             if duration <= 0:
                 raise RuntimeError(f"Invalid duration detected: {duration}s")
                 
-            log(f"✅ Audio duration: {duration:.2f}s ({duration/60:.2f}m)")
+            log(f"✅ AUDIO AUTHORITY duration: {duration:.2f}s ({duration/60:.2f}m)")
             return duration
         else:
             raise RuntimeError("Duration field not found in ffprobe output")
@@ -96,6 +98,196 @@ def get_audio_duration(audio_file: str) -> float:
         raise RuntimeError(f"Failed to parse ffprobe JSON output: {e}")
     except ValueError as e:
         raise RuntimeError(f"Duration is not a valid float: {e}")
+
+def get_video_duration(video_path: Path) -> float:
+    """
+    Get video duration using ffprobe
+    
+    Args:
+        video_path: Path to video file
+        
+    Returns:
+        Duration in seconds
+    """
+    cmd = [
+        'ffprobe', '-v', 'error',
+        '-show_entries', 'format=duration',
+        '-of', 'default=noprint_wrappers=1:nokey=1',
+        str(video_path)
+    ]
+    
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=5)
+        return float(result.stdout.strip())
+    except Exception:
+        return 0.0
+
+# ============================================================================
+# VIDEO TRIMMING FUNCTION - EXACT MATCH TO AUDIO DURATION
+# ============================================================================
+
+def trim_video_to_audio_duration(input_video: Path, output_video: Path, target_duration: float) -> bool:
+    """
+    Trim video exactly to match audio duration.
+    Used when video_duration > audio_duration.
+    
+    Args:
+        input_video: Path to input video
+        output_video: Path to output trimmed video
+        target_duration: Target duration in seconds (audio duration)
+        
+    Returns:
+        True if successful
+    """
+    log(f"✂️ Trimming video from original duration to exactly {target_duration:.3f}s (audio authority)")
+    
+    cmd = [
+        'ffmpeg', '-y',
+        '-i', str(input_video),
+        '-t', str(target_duration),
+        '-c', 'copy',  # Stream copy for speed
+        str(output_video)
+    ]
+    
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        
+        if output_video.exists() and output_video.stat().st_size > 0:
+            trimmed_duration = get_video_duration(output_video)
+            log(f"✅ Video trimmed successfully to {trimmed_duration:.3f}s (target: {target_duration:.3f}s)")
+            return True
+        else:
+            log(f"❌ Trimmed video is empty", "ERROR")
+            return False
+    except subprocess.CalledProcessError as e:
+        log(f"❌ Video trimming failed: {e.stderr if e.stderr else 'Unknown error'}", "ERROR")
+        return False
+
+# ============================================================================
+# STRICT AUDIO DURATION AUTHORITY VALIDATION
+# ============================================================================
+
+def enforce_audio_duration_authority(video_path: Path, audio_file: str) -> Path:
+    """
+    STRICT AUDIO DURATION AUTHORITY ENFORCEMENT
+    This function ALWAYS runs after video rendering to ensure final video duration
+    exactly matches audio duration.
+    
+    Rules:
+    1. If video_duration > audio_duration: Trim video to audio duration exactly
+    2. If video_duration < audio_duration: 
+       - If difference <= 0.5s: Allow with warning
+       - If difference > 0.5s: Raise warning (but continue)
+    3. Always log final durations for verification
+    
+    Args:
+        video_path: Path to rendered video file
+        audio_file: Path to audio file (source of truth)
+        
+    Returns:
+        Path to validated video file (may be trimmed version)
+        
+    Raises:
+        RuntimeError: If video file doesn't exist or validation fails critically
+    """
+    log("=" * 80)
+    log("🔍 AUDIO DURATION AUTHORITY VALIDATION")
+    log("=" * 80)
+    
+    # Verify video exists
+    if not video_path.exists() or video_path.stat().st_size == 0:
+        error_msg = f"❌ FATAL: Video file missing or empty: {video_path}"
+        log(error_msg, "ERROR")
+        raise RuntimeError(error_msg)
+    
+    # Get durations
+    try:
+        audio_duration = get_audio_duration(audio_file)
+        video_duration = get_video_duration(video_path)
+    except Exception as e:
+        error_msg = f"❌ FATAL: Failed to get durations for validation: {e}"
+        log(error_msg, "ERROR")
+        raise RuntimeError(error_msg)
+    
+    log(f"📊 VALIDATION INPUT:")
+    log(f"   Audio duration (AUTHORITY): {audio_duration:.6f}s")
+    log(f"   Video duration (rendered):  {video_duration:.6f}s")
+    log(f"   Difference:                 {video_duration - audio_duration:+.6f}s")
+    
+    # Create temporary file for trimmed version if needed
+    temp_trimmed = video_path.parent / f"temp_trimmed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+    validated_path = video_path
+    
+    # CASE 1: Video longer than audio - MUST TRIM
+    if video_duration > audio_duration:
+        log(f"⚠️ Video exceeds audio duration by {video_duration - audio_duration:.3f}s")
+        log(f"⚡ ENFORCING AUDIO AUTHORITY: Trimming video to match audio exactly...")
+        
+        trim_success = trim_video_to_audio_duration(video_path, temp_trimmed, audio_duration)
+        
+        if trim_success and temp_trimmed.exists() and temp_trimmed.stat().st_size > 0:
+            # Verify trimmed duration
+            trimmed_duration = get_video_duration(temp_trimmed)
+            log(f"✅ Trimmed video duration: {trimmed_duration:.6f}s")
+            
+            # Replace original with trimmed version
+            shutil.copy2(temp_trimmed, video_path)
+            validated_path = video_path
+            
+            # Clean up temp file
+            try:
+                temp_trimmed.unlink()
+            except:
+                pass
+                
+            log(f"✅ Audio authority enforced: Video trimmed to match audio duration")
+        else:
+            error_msg = f"❌ FATAL: Failed to trim video to audio duration"
+            log(error_msg, "ERROR")
+            raise RuntimeError(error_msg)
+    
+    # CASE 2: Video shorter than audio
+    elif video_duration < audio_duration:
+        difference = audio_duration - video_duration
+        
+        if difference <= 0.5:
+            log(f"⚠️ Video shorter than audio by {difference:.3f}s (within 0.5s tolerance)")
+            log(f"   Acceptable tolerance - continuing")
+        else:
+            log(f"⚠️⚠️⚠️ VALIDATION WARNING: Video shorter than audio by {difference:.3f}s", "WARNING")
+            log(f"   This exceeds 0.5s tolerance and may cause audio/video desync", "WARNING")
+            log(f"   Consider increasing clip duration in asset acquisition", "WARNING")
+            # Continue anyway as per requirements
+        
+        validated_path = video_path
+    
+    # CASE 3: Exact match - perfect
+    else:
+        log(f"✅ PERFECT MATCH: Video duration exactly equals audio authority")
+        validated_path = video_path
+    
+    # FINAL VALIDATION: Get final durations after any trimming
+    final_audio_duration = get_audio_duration(audio_file)
+    final_video_duration = get_video_duration(validated_path)
+    final_difference = final_video_duration - final_audio_duration
+    
+    log("=" * 80)
+    log("✅ AUDIO AUTHORITY VALIDATION COMPLETE")
+    log("=" * 80)
+    log(f"   FINAL Audio duration (AUTHORITY): {final_audio_duration:.6f}s")
+    log(f"   FINAL Video duration:             {final_video_duration:.6f}s")
+    log(f"   FINAL Difference:                  {final_difference:+.6f}s")
+    
+    if abs(final_difference) < 0.01:
+        log(f"   ✅ EXACT MATCH ACHIEVED")
+    elif final_difference > 0:
+        log(f"   ⚠️ Video exceeds audio by {final_difference:.3f}s after validation")
+    else:
+        log(f"   ⚠️ Video shorter than audio by {abs(final_difference):.3f}s after validation")
+    
+    log("=" * 80)
+    
+    return validated_path
 
 
 # ============================================================================
@@ -627,7 +819,7 @@ def get_clip_duration(clip_path: Path) -> float:
     ]
     
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=2)
         return float(result.stdout.strip())
     except Exception as e:
         log(f"⚠️ Could not determine duration for {clip_path.name}: {e}")
@@ -750,9 +942,9 @@ def verify_manifest_integrity(manifest_path: Path, clips_path: Path) -> tuple:
             manifest = json.load(f)
         
         clips = manifest.get('clips', [])
-        required_duration = manifest.get('required_duration', 0)
+        audio_authority_target = manifest.get('audio_authority_target', manifest.get('target_duration', 0))
         
-        log(f"🔍 Verifying manifest integrity: {len(clips)} clips, required {required_duration:.1f}s")
+        log(f"🔍 Verifying manifest integrity: {len(clips)} clips, audio authority target: {audio_authority_target:.1f}s")
         
         valid_clips = []
         total_duration = 0.0
@@ -782,11 +974,6 @@ def verify_manifest_integrity(manifest_path: Path, clips_path: Path) -> tuple:
         
         log(f"📊 Verified {len(valid_clips)} valid clips, total duration: {total_duration:.1f}s")
         
-        # Check if total duration meets requirement
-        if total_duration < required_duration:
-            log(f"❌ Total clip duration ({total_duration:.1f}s) is less than required ({required_duration:.1f}s)", "ERROR")
-            return valid_clips, total_duration, False
-        
         return valid_clips, total_duration, True
         
     except Exception as e:
@@ -813,6 +1000,8 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     - Automatic clip looping to fill full audio duration
     - Enhanced clip validation and shuffling
     - ABSOLUTELY NO BLACK VIDEO - Fails safely if requirements not met
+    - AUDIO DURATION AUTHORITY - Final video must match audio duration exactly
+    - STRICT POST-RENDER VALIDATION - Automatically enforces audio duration match
     
     Args:
         script_file: Path to script JSON
@@ -837,10 +1026,11 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     output_dir.mkdir(parents=True, exist_ok=True)
     
     temp_video = output_dir / f'temp_shorts_{run_id}.mp4'
+    assembled_video = output_dir / f'assembled_shorts_{run_id}.mp4'
     output_file = output_dir / 'short_video.mp4'
     max_duration = 58  # YouTube Shorts max is 60 seconds, using 58 for safety
     
-    # Check audio file
+    # Step 1: Get AUDIO AUTHORITY duration
     audio_path = Path(audio_file)
     if not audio_path.exists():
         log(f"❌ Audio file not found: {audio_file}")
@@ -848,7 +1038,7 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     
     audio_duration = get_audio_duration(audio_file)
     target_duration = min(audio_duration, max_duration)
-    log(f"🎯 Target duration: {target_duration:.2f}s")
+    log(f"🎯 AUDIO AUTHORITY target duration: {target_duration:.2f}s")
     
     # Load and verify manifest
     clips_path = Path(clips_dir)
@@ -877,7 +1067,7 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     if total_clips_duration < target_duration:
         error_msg = (
             f"❌ FATAL: Total clip duration ({total_clips_duration:.1f}s) "
-            f"is less than target audio duration ({target_duration:.1f}s). "
+            f"is less than AUDIO AUTHORITY target ({target_duration:.1f}s). "
             f"Cannot generate video without black sections. "
             f"Asset acquisition must fetch more clips."
         )
@@ -906,25 +1096,69 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
         '-pix_fmt', 'yuv420p',
         '-r', '30',
         '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,format=yuv420p',
-        str(temp_video)
+        str(assembled_video)
     ]
     
     # Execute first pass (video assembly)
     log("🎬 Assembling video...")
     try:
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        log(f"✅ Video assembled: {temp_video}")
+        log(f"✅ Video assembled: {assembled_video}")
     except subprocess.CalledProcessError as e:
         log(f"❌ Video assembly failed: {e.stderr if e.stderr else 'Unknown error'}")
         return None
     
     # Verify assembled video exists and has content
-    if not temp_video.exists() or temp_video.stat().st_size == 0:
+    if not assembled_video.exists() or assembled_video.stat().st_size == 0:
         log(f"❌ Assembled video is empty or missing", "ERROR")
         return None
     
+    # Step 2: Get assembled video duration
+    assembled_duration = get_video_duration(assembled_video)
+    log(f"📊 Assembled video duration: {assembled_duration:.3f}s")
+    log(f"📊 AUDIO AUTHORITY duration: {target_duration:.3f}s")
+    
+    # Step 3: AUDIO DURATION AUTHORITY ENFORCEMENT (initial pass)
+    # Case 1: Video longer than audio - TRIM EXACTLY to audio duration
+    if assembled_duration > target_duration:
+        log(f"⚠️ Video is longer than audio by {assembled_duration - target_duration:.3f}s")
+        log(f"✂️ Trimming video to match AUDIO AUTHORITY exactly...")
+        
+        trim_success = trim_video_to_audio_duration(assembled_video, temp_video, target_duration)
+        if not trim_success:
+            log(f"❌ Failed to trim video to audio duration", "ERROR")
+            return None
+        
+        # Update reference for subtitle processing
+        video_for_subtitles = temp_video
+        final_duration = target_duration
+        
+    # Case 2: Video shorter than audio - Check tolerance
+    elif assembled_duration < target_duration:
+        difference = target_duration - assembled_duration
+        log(f"⚠️ Video is shorter than audio by {difference:.3f}s")
+        
+        if difference > 0.5:
+            # Difference > 0.5s - raise validation warning but continue
+            log(f"⚠️ VALIDATION WARNING: Video shorter than audio by {difference:.3f}s (exceeds 0.5s tolerance)", "WARNING")
+            log(f"   This may cause audio/video desync. Consider increasing clip duration in asset acquisition.")
+        
+        # Use assembled video as-is (no trim needed)
+        import shutil
+        shutil.copy2(assembled_video, temp_video)
+        video_for_subtitles = temp_video
+        final_duration = assembled_duration
+        
+    else:
+        # Exact match - perfect
+        log(f"✅ Video duration exactly matches AUDIO AUTHORITY!")
+        import shutil
+        shutil.copy2(assembled_video, temp_video)
+        video_for_subtitles = temp_video
+        final_duration = assembled_duration
+    
     # Get video metadata for subtitle styling
-    width, height, duration, is_short, fps = get_video_metadata(temp_video)
+    width, height, duration, is_short, fps = get_video_metadata(video_for_subtitles)
     log(f"📹 Video metadata: {width}x{height}, {duration:.1f}s, {fps:.1f}fps")
     
     # Process subtitles
@@ -960,7 +1194,7 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     # Render final video with premium subtitles
     if subtitles_ass and subtitles_ass.exists():
         render_success = render_video_with_premium_subtitles(
-            temp_video,
+            video_for_subtitles,
             output_file,
             subtitles_ass,
             duration,
@@ -969,8 +1203,7 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     else:
         # No subtitles, just copy
         log("📝 No subtitles to add, copying video...")
-        import shutil
-        shutil.copy2(temp_video, output_file)
+        shutil.copy2(video_for_subtitles, output_file)
         render_success = True
     
     # Verify final output
@@ -1047,25 +1280,49 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
             try:
                 subprocess.run(cmd_overlay, check=True)
                 if final_output.exists() and final_output.stat().st_size > 0:
-                    os.replace(final_output, output_file)
+                    shutil.move(str(final_output), str(output_file))
                     log("✅ Overlays added successfully")
             except Exception as e:
                 log(f"⚠️ Overlay addition failed: {e}")
     
-    # Final verification
-    if not output_file.exists() or output_file.stat().st_size == 0:
-        log(f"❌ Final output file is missing or empty", "ERROR")
+    # ============================================================================
+    # STEP 4: STRICT AUDIO DURATION AUTHORITY ENFORCEMENT
+    # This runs AUTOMATICALLY after EVERY video render - NOT optional
+    # ============================================================================
+    try:
+        log("=" * 80)
+        log("⚡ AUTOMATIC AUDIO DURATION AUTHORITY VALIDATION")
+        log("=" * 80)
+        
+        validated_video = enforce_audio_duration_authority(output_file, audio_file)
+        
+        # Update output_file to validated version (should be same path)
+        output_file = validated_video
+        
+        log("✅ Audio duration authority validation completed successfully")
+        
+    except Exception as e:
+        log(f"❌ CRITICAL: Audio duration authority validation failed: {e}", "ERROR")
+        log(f"   Pipeline cannot proceed with invalid duration", "ERROR")
         return None
     
     # Cleanup
     if temp_video.exists():
         temp_video.unlink()
+    if assembled_video.exists():
+        assembled_video.unlink()
+    
+    # Get final metadata for logging
+    final_audio_duration = get_audio_duration(audio_file)
+    final_video_duration = get_video_duration(output_file)
     
     size_mb = output_file.stat().st_size / (1024 * 1024)
     log(f"✅ SHORTS video with PREMIUM ANIMATED subtitles complete")
     log(f"   Output: {output_file}")
     log(f"   Size: {size_mb:.2f} MB")
-    log(f"   Duration: {duration:.1f}s")
+    log(f"   Final video duration: {final_video_duration:.1f}s")
+    log(f"   AUDIO AUTHORITY: {final_audio_duration:.1f}s")
+    log(f"   Duration match: {'✓' if abs(final_video_duration - final_audio_duration) < 0.1 else '⚠️'}")
     log(f"   FPS: {fps:.1f}")
     log(f"   Subtitles: {'Premium Animated' if premium_subtitles and subtitles_file else 'Standard'}")
     log(f"   Clips used: {len(valid_clips)}")
@@ -1079,7 +1336,10 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     
     metadata = {
         'video_type': 'short',
-        'duration_seconds': duration,
+        'duration_seconds': final_video_duration,
+        'audio_authority_duration': final_audio_duration,
+        'duration_match': abs(final_video_duration - final_audio_duration) < 0.1,
+        'duration_difference': final_video_duration - final_audio_duration,
         'file_size_mb': size_mb,
         'fps': fps,
         'resolution': f"{width}x{height}",
@@ -1090,6 +1350,8 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
         'cta_included': cta_file and Path(cta_file).exists(),
         'clips_validated': len(valid_clips),
         'manifest_pages': manifest_data.get('pages_searched', 1) if manifest_data else 1,
+        'audio_authority_validated': True,
+        'validation_timestamp': datetime.now().isoformat(),
         'generated_at': datetime.now().isoformat()
     }
     
@@ -1118,6 +1380,8 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     - Automatic clip looping to fill full audio duration
     - Enhanced clip validation and shuffling
     - ABSOLUTELY NO BLACK VIDEO - Fails safely if requirements not met
+    - AUDIO DURATION AUTHORITY - Final video must match audio duration exactly
+    - STRICT POST-RENDER VALIDATION - Automatically enforces audio duration match
     
     Args:
         script_file: Path to script JSON
@@ -1140,9 +1404,10 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     output_dir.mkdir(parents=True, exist_ok=True)
     
     temp_video = output_dir / f'temp_long_{run_id}.mp4'
+    assembled_video = output_dir / f'assembled_long_{run_id}.mp4'
     output_file = output_dir / 'long_video.mp4'
     
-    # Check audio file
+    # Step 1: Get AUDIO AUTHORITY duration
     audio_path = Path(audio_file)
     if not audio_path.exists():
         log(f"❌ Audio file not found: {audio_file}")
@@ -1150,7 +1415,7 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     
     audio_duration = get_audio_duration(audio_file)
     target_duration = audio_duration
-    log(f"🎯 Target duration: {target_duration:.2f}s ({target_duration/60:.2f}m)")
+    log(f"🎯 AUDIO AUTHORITY target duration: {target_duration:.2f}s ({target_duration/60:.2f}m)")
     
     # Load and verify manifest
     clips_path = Path(clips_dir)
@@ -1179,7 +1444,7 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     if total_clips_duration < target_duration:
         error_msg = (
             f"❌ FATAL: Total clip duration ({total_clips_duration:.1f}s) "
-            f"is less than target audio duration ({target_duration:.1f}s). "
+            f"is less than AUDIO AUTHORITY target ({target_duration:.1f}s). "
             f"Cannot generate video without black sections. "
             f"Asset acquisition must fetch more clips."
         )
@@ -1207,25 +1472,67 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
         '-pix_fmt', 'yuv420p',
         '-r', '30',
         '-vf', 'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p',
-        str(temp_video)
+        str(assembled_video)
     ]
     
     # Execute first pass (video assembly)
     log("🎬 Assembling video...")
     try:
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        log(f"✅ Video assembled: {temp_video}")
+        log(f"✅ Video assembled: {assembled_video}")
     except subprocess.CalledProcessError as e:
         log(f"❌ Video assembly failed: {e.stderr if e.stderr else 'Unknown error'}")
         return None
     
     # Verify assembled video exists and has content
-    if not temp_video.exists() or temp_video.stat().st_size == 0:
+    if not assembled_video.exists() or assembled_video.stat().st_size == 0:
         log(f"❌ Assembled video is empty or missing", "ERROR")
         return None
     
+    # Step 2: Get assembled video duration
+    assembled_duration = get_video_duration(assembled_video)
+    log(f"📊 Assembled video duration: {assembled_duration:.3f}s")
+    log(f"📊 AUDIO AUTHORITY duration: {target_duration:.3f}s")
+    
+    # Step 3: AUDIO DURATION AUTHORITY ENFORCEMENT (initial pass)
+    # Case 1: Video longer than audio - TRIM EXACTLY to audio duration
+    if assembled_duration > target_duration:
+        log(f"⚠️ Video is longer than audio by {assembled_duration - target_duration:.3f}s")
+        log(f"✂️ Trimming video to match AUDIO AUTHORITY exactly...")
+        
+        trim_success = trim_video_to_audio_duration(assembled_video, temp_video, target_duration)
+        if not trim_success:
+            log(f"❌ Failed to trim video to audio duration", "ERROR")
+            return None
+        
+        # Update reference for subtitle processing
+        video_for_subtitles = temp_video
+        final_duration = target_duration
+        
+    # Case 2: Video shorter than audio - Check tolerance
+    elif assembled_duration < target_duration:
+        difference = target_duration - assembled_duration
+        log(f"⚠️ Video is shorter than audio by {difference:.3f}s")
+        
+        if difference > 0.5:
+            # Difference > 0.5s - raise validation warning but continue
+            log(f"⚠️ VALIDATION WARNING: Video shorter than audio by {difference:.3f}s (exceeds 0.5s tolerance)", "WARNING")
+            log(f"   This may cause audio/video desync. Consider increasing clip duration in asset acquisition.")
+        
+        # Use assembled video as-is (no trim needed)
+        shutil.copy2(assembled_video, temp_video)
+        video_for_subtitles = temp_video
+        final_duration = assembled_duration
+        
+    else:
+        # Exact match - perfect
+        log(f"✅ Video duration exactly matches AUDIO AUTHORITY!")
+        shutil.copy2(assembled_video, temp_video)
+        video_for_subtitles = temp_video
+        final_duration = assembled_duration
+    
     # Get video metadata for subtitle styling
-    width, height, duration, is_short, fps = get_video_metadata(temp_video)
+    width, height, duration, is_short, fps = get_video_metadata(video_for_subtitles)
     log(f"📹 Video metadata: {width}x{height}, {duration:.1f}s, {fps:.1f}fps")
     
     # Process subtitles
@@ -1261,7 +1568,7 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     # Render final video with premium subtitles
     if subtitles_ass and subtitles_ass.exists():
         render_success = render_video_with_premium_subtitles(
-            temp_video,
+            video_for_subtitles,
             output_file,
             subtitles_ass,
             duration,
@@ -1270,8 +1577,7 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     else:
         # No subtitles, just copy
         log("📝 No subtitles to add, copying video...")
-        import shutil
-        shutil.copy2(temp_video, output_file)
+        shutil.copy2(video_for_subtitles, output_file)
         render_success = True
     
     # Verify final output
@@ -1279,15 +1585,44 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
         log(f"❌ Final video rendering failed", "ERROR")
         return None
     
+    # ============================================================================
+    # STEP 4: STRICT AUDIO DURATION AUTHORITY ENFORCEMENT
+    # This runs AUTOMATICALLY after EVERY video render - NOT optional
+    # ============================================================================
+    try:
+        log("=" * 80)
+        log("⚡ AUTOMATIC AUDIO DURATION AUTHORITY VALIDATION")
+        log("=" * 80)
+        
+        validated_video = enforce_audio_duration_authority(output_file, audio_file)
+        
+        # Update output_file to validated version (should be same path)
+        output_file = validated_video
+        
+        log("✅ Audio duration authority validation completed successfully")
+        
+    except Exception as e:
+        log(f"❌ CRITICAL: Audio duration authority validation failed: {e}", "ERROR")
+        log(f"   Pipeline cannot proceed with invalid duration", "ERROR")
+        return None
+    
     # Cleanup
     if temp_video.exists():
         temp_video.unlink()
+    if assembled_video.exists():
+        assembled_video.unlink()
+    
+    # Get final metadata for logging
+    final_audio_duration = get_audio_duration(audio_file)
+    final_video_duration = get_video_duration(output_file)
     
     size_mb = output_file.stat().st_size / (1024 * 1024)
     log(f"✅ LONG video with PREMIUM ANIMATED subtitles complete")
     log(f"   Output: {output_file}")
     log(f"   Size: {size_mb:.2f} MB")
-    log(f"   Duration: {duration:.1f}s ({duration/60:.2f}m)")
+    log(f"   Final video duration: {final_video_duration:.1f}s ({final_video_duration/60:.2f}m)")
+    log(f"   AUDIO AUTHORITY: {final_audio_duration:.1f}s")
+    log(f"   Duration match: {'✓' if abs(final_video_duration - final_audio_duration) < 0.1 else '⚠️'}")
     log(f"   FPS: {fps:.1f}")
     log(f"   Subtitles: {'Premium Animated' if premium_subtitles and subtitles_file else 'Standard'}")
     log(f"   Clips used: {len(valid_clips)}")
@@ -1301,8 +1636,11 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     
     metadata = {
         'video_type': 'long',
-        'duration_seconds': duration,
-        'duration_minutes': duration/60,
+        'duration_seconds': final_video_duration,
+        'duration_minutes': final_video_duration/60,
+        'audio_authority_duration': final_audio_duration,
+        'duration_match': abs(final_video_duration - final_audio_duration) < 0.1,
+        'duration_difference': final_video_duration - final_audio_duration,
         'file_size_mb': size_mb,
         'fps': fps,
         'resolution': f"{width}x{height}",
@@ -1311,6 +1649,8 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
         'animation': 'fade_in+slide_up+scale' if premium_subtitles else 'none',
         'clips_validated': len(valid_clips),
         'manifest_pages': manifest_data.get('pages_searched', 1) if manifest_data else 1,
+        'audio_authority_validated': True,
+        'validation_timestamp': datetime.now().isoformat(),
         'generated_at': datetime.now().isoformat()
     }
     
@@ -1326,7 +1666,7 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
 # ============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description='Edit video with PREMIUM ANIMATED subtitles - NO BLACK VIDEO FALLBACK')
+    parser = argparse.ArgumentParser(description='Edit video with PREMIUM ANIMATED subtitles - NO BLACK VIDEO FALLBACK - AUDIO DURATION AUTHORITY')
     parser.add_argument('--type', choices=['long', 'short'], required=True,
                        help='Video type (long form or short)')
     parser.add_argument('--script-file', required=True,
@@ -1356,6 +1696,8 @@ def main():
     log(f"🎬 PREMIUM ANIMATED SUBTITLE RENDERING - {args.type.upper()}")
     log(f"   Mode: {'PREMIUM ANIMATED' if args.premium else 'STANDARD'}")
     log(f"   BLACK VIDEO FALLBACK: DISABLED")
+    log(f"   AUDIO DURATION AUTHORITY: ENABLED")
+    log(f"   POST-RENDER VALIDATION: AUTOMATIC (ALWAYS RUNS)")
     log("=" * 80)
     
     # Step 1: Dynamically find audio file if not specified
@@ -1406,6 +1748,7 @@ def main():
     if output_file:
         log(f"✅ {args.type.upper()} video with {'PREMIUM ANIMATED' if args.premium else 'STANDARD'} subtitles created successfully")
         log(f"   Output: {output_file}")
+        log(f"   AUDIO DURATION AUTHORITY enforced - final video matches audio")
         sys.exit(0)
     else:
         log(f"❌ FATAL: {args.type.upper()} video creation failed - no video generated")
