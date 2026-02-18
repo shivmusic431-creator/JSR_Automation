@@ -5,6 +5,7 @@ Uses open search strategy and prevents clip reuse via Firebase
 Includes strict video validation to reject static images and low-quality clips
 NOW WITH TRUE UNLIMITED PAGINATION - Continues until API returns no results
 STRICT PRODUCTION MODE - No test manifests, always acquires real clips
+AUDIO DURATION AUTHORITY - Uses ACTUAL audio file duration as single source of truth
 """
 import os
 import json
@@ -326,19 +327,30 @@ class FirebaseManager:
             log(f"Failed to mark clip {clip_id} as used: {e}", "WARNING")
 
 # ============================================================================
-# AUDIO DURATION EXTRACTION - AUTO-DETECT WITH PROPER PRIORITY
+# AUDIO DURATION EXTRACTION - ACTUAL AUDIO AS SINGLE SOURCE OF TRUTH
 # ============================================================================
 
-def find_audio_file() -> Path:
+def find_audio_file(video_type: str) -> Path:
     """
-    Auto-detect audio file using priority order:
-    1. audio_long.wav
-    2. audio_short.wav  
-    3. audio.wav
-    4. final_audio.wav
-    5. output.wav
-    6. Newest .wav file in output directory
+    Auto-detect audio file using priority order based on video type:
     
+    For LONG videos:
+    1. audio_long.wav
+    2. audio.wav
+    3. final_audio.wav
+    4. output.wav
+    5. Newest .wav file in output directory
+    
+    For SHORT videos:
+    1. audio_short.wav
+    2. audio.wav
+    3. final_audio.wav
+    4. output.wav
+    5. Newest .wav file in output directory
+    
+    Args:
+        video_type: 'long' or 'short'
+        
     Returns:
         Path to audio file
         
@@ -348,14 +360,21 @@ def find_audio_file() -> Path:
     if not OUTPUT_DIR.exists():
         raise RuntimeError(f"Output directory not found: {OUTPUT_DIR}")
     
-    # Priority order
-    priority_files = [
-        OUTPUT_DIR / 'audio_long.wav',
-        OUTPUT_DIR / 'audio_short.wav',
-        OUTPUT_DIR / 'audio.wav',
-        OUTPUT_DIR / 'final_audio.wav',
-        OUTPUT_DIR / 'output.wav'
-    ]
+    # Priority order based on video type
+    if video_type == 'short':
+        priority_files = [
+            OUTPUT_DIR / 'audio_short.wav',
+            OUTPUT_DIR / 'audio.wav',
+            OUTPUT_DIR / 'final_audio.wav',
+            OUTPUT_DIR / 'output.wav'
+        ]
+    else:  # long
+        priority_files = [
+            OUTPUT_DIR / 'audio_long.wav',
+            OUTPUT_DIR / 'audio.wav',
+            OUTPUT_DIR / 'final_audio.wav',
+            OUTPUT_DIR / 'output.wav'
+        ]
     
     # Check priority files in order
     for audio_file in priority_files:
@@ -374,26 +393,23 @@ def find_audio_file() -> Path:
     # No audio files found
     raise RuntimeError(f"No audio file found in {OUTPUT_DIR}")
 
-def get_audio_duration(audio_file: Path = None) -> float:
+def get_audio_duration(audio_file: Path) -> float:
     """
-    Get audio duration using ffprobe
+    Get audio duration using ffprobe - ACTUAL DURATION AS SINGLE SOURCE OF TRUTH
     
     Args:
-        audio_file: Path to audio file (optional, auto-detected if None)
+        audio_file: Path to audio file
         
     Returns:
-        Duration in seconds
+        Duration in seconds with high precision
         
     Raises:
         RuntimeError: If duration cannot be determined
     """
-    if audio_file is None:
-        audio_file = find_audio_file()
-    
     if not audio_file.exists():
         raise RuntimeError(f"Audio file not found: {audio_file}")
     
-    log(f"🎵 Getting audio duration from: {audio_file}")
+    log(f"🎵 Getting ACTUAL audio duration from: {audio_file}")
     
     cmd = [
         'ffprobe', '-v', 'error',
@@ -410,7 +426,7 @@ def get_audio_duration(audio_file: Path = None) -> float:
             check=True
         )
         duration = float(result.stdout.strip())
-        log(f"📊 Audio duration: {duration:.2f}s ({duration/60:.2f}m)")
+        log(f"📊 ACTUAL audio duration: {duration:.2f}s ({duration/60:.2f}m)")
         return duration
         
     except subprocess.CalledProcessError as e:
@@ -837,15 +853,22 @@ def get_clip_duration(clip_path: Path) -> float:
         return 0.0
 
 # ============================================================================
-# MAIN ACQUISITION FUNCTION - PRODUCTION ONLY - NO TEST MODE
+# MAIN ACQUISITION FUNCTION - PRODUCTION ONLY - AUDIO DURATION AS SINGLE SOURCE OF TRUTH
 # ============================================================================
 
 def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
     """
-    Acquire stock footage based on audio duration requirement
+    Acquire stock footage based on ACTUAL AUDIO DURATION as single source of truth
     STRICT PRODUCTION MODE: Always detects audio and downloads real clips
     Includes strict validation to reject static images and low-quality clips
     TRUE UNLIMITED PAGINATION - Continues until API returns no results
+    
+    DURATION AUTHORITY RULES:
+    - target_duration = ACTUAL audio file duration (ffprobe)
+    - total_clip_duration must be >= target_duration
+    - total_clip_duration must be <= target_duration + 20 seconds
+    - If next clip causes overflow beyond target_duration + 20s, still accept it
+    - NEVER stop below target_duration
     
     Args:
         script_file: Path to script JSON (unused but kept for compatibility)
@@ -865,9 +888,9 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
     log(f"Run ID: {run_id}")
     log(f"Video type: {video_type}")
     
-    # Step 1: Auto-detect audio file and get duration
+    # Step 1: Auto-detect audio file based on video type - ACTUAL AUDIO AS SOURCE OF TRUTH
     try:
-        audio_file = find_audio_file()
+        audio_file = find_audio_file(video_type)
         target_duration = get_audio_duration(audio_file)
     except RuntimeError as e:
         log(f"❌ {e}", "ERROR")
@@ -878,11 +901,12 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
         log(f"⚠️ Short video duration exceeds 58s, limiting to 58s")
         target_duration = 58
     
-    log(f"🎯 Target duration: {target_duration:.2f}s ({target_duration/60:.2f}m)")
+    log(f"🎯 AUDIO AUTHORITY TARGET DURATION: {target_duration:.2f}s ({target_duration/60:.2f}m)")
+    log(f"🎯 This is the SINGLE SOURCE OF TRUTH - all clip acquisition will target this")
     
-    # Add safety margin (5% extra to ensure we have enough)
-    required_duration = target_duration * 1.05
-    log(f"🎯 Required duration (with 5% margin): {required_duration:.2f}s")
+    # Maximum allowed duration (target + 20 seconds)
+    max_allowed_duration = target_duration + 20.0
+    log(f"🎯 Maximum allowed clip duration (target + 20s): {max_allowed_duration:.2f}s")
     
     # Step 2: Initialize Firebase
     firebase = FirebaseManager()
@@ -893,17 +917,23 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
     # Step 4: Check if we have existing valid clips
     valid_clips, existing_duration = verify_and_repair_manifest(MANIFEST_FILE, CLIPS_DIR, video_type, firebase)
     
-    if existing_duration >= required_duration:
-        log(f"✅ Existing valid clips already meet duration requirement: {existing_duration:.2f}s >= {required_duration:.2f}s")
+    # CRITICAL: CUMULATIVE DURATION LOGIC - NOT INDIVIDUAL CLIP SELECTION
+    # We track total duration cumulatively, not per-clip
+    downloaded_duration = existing_duration
+    downloaded_clips = valid_clips.copy()
+    
+    if downloaded_duration >= target_duration:
+        log(f"✅ Existing valid clips already meet audio duration requirement: {downloaded_duration:.2f}s >= {target_duration:.2f}s")
+        if downloaded_duration > max_allowed_duration:
+            log(f"⚠️ Warning: Existing clips exceed max allowed by {downloaded_duration - max_allowed_duration:.1f}s")
         return MANIFEST_FILE
     
     if valid_clips:
-        log(f"📊 Existing valid clips: {existing_duration:.2f}s / {required_duration:.2f}s needed")
-        log(f"🔄 Need additional {required_duration - existing_duration:.2f}s of footage")
+        log(f"📊 Existing valid clips: {downloaded_duration:.2f}s / {target_duration:.2f}s needed")
+        log(f"🔄 Need additional {target_duration - downloaded_duration:.2f}s of footage")
     
-    # Step 5: Download additional clips until target reached - TRUE UNLIMITED PAGINATION
-    downloaded_duration = existing_duration
-    downloaded_clips = valid_clips.copy()
+    # Step 5: Download additional clips until cumulative duration reaches target
+    # TRUE UNLIMITED PAGINATION - Continue until API returns no results
     used_queries = set()
     skipped_count = 0
     validation_failures = 0
@@ -912,13 +942,17 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
     query_index = 0
     api_exhausted = False
     
-    log("🚀 Starting clip acquisition with TRUE UNLIMITED PAGINATION...")
+    log("🚀 Starting clip acquisition with CUMULATIVE DURATION LOGIC...")
     log("📊 Will continue searching page by page until either:")
-    log("   - Sufficient clips are found, OR")
+    log(f"   - Cumulative clip duration >= {target_duration:.2f}s (AUDIO AUTHORITY), OR")
     log("   - API returns no more results")
+    log("📊 RULES:")
+    log("   - DO NOT stop below target_duration")
+    log("   - If next clip causes overflow, still accept it")
+    log(f"   - Maximum allowed total: {max_allowed_duration:.2f}s")
     
-    # Keep downloading until we have enough duration or API is exhausted
-    while downloaded_duration < required_duration and not api_exhausted:
+    # Keep downloading until we have enough cumulative duration or API is exhausted
+    while downloaded_duration < target_duration and not api_exhausted:
         found_any_on_page = False
         page_results_count = 0
         page_has_more = False
@@ -928,7 +962,7 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
             # Rotate through queries
             current_query = SEARCH_QUERIES[(query_index + query_offset) % len(SEARCH_QUERIES)]
             
-            if downloaded_duration >= required_duration:
+            if downloaded_duration >= target_duration:
                 break
             
             if current_query in used_queries and page == 1:
@@ -954,7 +988,9 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
             
             # Process each video
             for video in videos:
-                if downloaded_duration >= required_duration:
+                # CRITICAL: Check CUMULATIVE DURATION, not individual clip selection
+                if downloaded_duration >= target_duration:
+                    log(f"✅ Cumulative target reached: {downloaded_duration:.2f}s >= {target_duration:.2f}s")
                     break
                 
                 video_id = video.get('id')
@@ -973,18 +1009,18 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
                 if not video_info:
                     continue
                 
-                url, duration, width, height = video_info
+                url, clip_duration, width, height = video_info
                 
                 # Validate duration
-                if duration <= 0:
-                    log(f"Invalid duration for video {video_id}: {duration}", "WARNING")
+                if clip_duration <= 0:
+                    log(f"Invalid duration for video {video_id}: {clip_duration}", "WARNING")
                     continue
                 
                 # Try to download a valid clip (with retries)
                 clip_attempts = 0
                 valid_clip_found = False
                 
-                while clip_attempts < MAX_RETRIES_PER_CLIP and not valid_clip_found and downloaded_duration < required_duration:
+                while clip_attempts < MAX_RETRIES_PER_CLIP and not valid_clip_found and downloaded_duration < target_duration:
                     clip_attempts += 1
                     
                     # Generate temporary filename
@@ -1008,26 +1044,39 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
                             temp_path.rename(final_path)
                             
                             # Mark as used in Firebase
-                            firebase.mark_clip_used(video_id, duration)
+                            firebase.mark_clip_used(video_id, clip_duration)
                             
-                            # Update tracking
+                            # CRITICAL: CUMULATIVE DURATION - add to total
                             downloaded_clips.append({
                                 'clip_id': video_id,
                                 'filename': final_filename,
                                 'file': str(final_path.absolute()),
-                                'duration': duration,
+                                'duration': clip_duration,
                                 'query': current_query,
                                 'url': url,
                                 'width': width,
                                 'height': height,
                                 'page': page
                             })
-                            downloaded_duration += duration
+                            
+                            # Update cumulative duration
+                            old_duration = downloaded_duration
+                            downloaded_duration += clip_duration
                             found_any_on_page = True
                             valid_clip_found = True
                             
-                            log(f"✅ Added: {final_filename} ({duration:.1f}s, {width}x{height})")
-                            log(f"📊 Progress: {downloaded_duration:.1f}s / {required_duration:.1f}s ({downloaded_duration/required_duration*100:.1f}%)")
+                            # Check overflow status
+                            overflow = downloaded_duration - target_duration
+                            overflow_status = ""
+                            if overflow > 0:
+                                overflow_status = f" (OVERFLOW: +{overflow:.1f}s)"
+                            
+                            log(f"✅ Added: {final_filename} ({clip_duration:.1f}s, {width}x{height}){overflow_status}")
+                            log(f"📊 CUMULATIVE PROGRESS: {downloaded_duration:.1f}s / {target_duration:.1f}s ({downloaded_duration/target_duration*100:.1f}%)")
+                            
+                            # Check against max allowed
+                            if downloaded_duration > max_allowed_duration:
+                                log(f"⚠️ Cumulative duration exceeds max allowed by {downloaded_duration - max_allowed_duration:.1f}s")
                         else:
                             # Invalid clip - delete and retry
                             validation_failures += 1
@@ -1075,19 +1124,20 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
         if total_searched_pages % 10 == 0:
             log(f"\n{'='*60}")
             log(f"📈 PROGRESS REPORT after {total_searched_pages} pages searched")
-            log(f"   Downloaded: {downloaded_duration:.1f}s / {required_duration:.1f}s ({downloaded_duration/required_duration*100:.1f}%)")
+            log(f"   CUMULATIVE: {downloaded_duration:.1f}s / {target_duration:.1f}s ({downloaded_duration/target_duration*100:.1f}%)")
             log(f"   Valid clips: {len(downloaded_clips)}")
             log(f"   Skipped (used): {skipped_count}")
             log(f"   Validation failures: {validation_failures}")
             log(f"{'='*60}\n")
     
-    # Step 5: Final validation - STRICT duration enforcement
+    # Step 5: Final validation - STRICT AUDIO AUTHORITY ENFORCEMENT
     log("\n" + "=" * 80)
-    log("📊 ACQUISITION SUMMARY")
+    log("📊 ACQUISITION SUMMARY - AUDIO DURATION AS SINGLE SOURCE OF TRUTH")
     log("=" * 80)
-    log(f"Target duration: {target_duration:.2f}s")
-    log(f"Required duration (with margin): {required_duration:.2f}s")
-    log(f"Downloaded duration: {downloaded_duration:.2f}s")
+    log(f"AUDIO AUTHORITY target duration: {target_duration:.2f}s")
+    log(f"Maximum allowed (target + 20s): {max_allowed_duration:.2f}s")
+    log(f"CUMULATIVE downloaded duration: {downloaded_duration:.2f}s")
+    log(f"Difference from target: {downloaded_duration - target_duration:+.2f}s")
     log(f"Clips downloaded: {len(downloaded_clips)}")
     log(f"Clips skipped (already used): {skipped_count}")
     log(f"Validation failures: {validation_failures}")
@@ -1095,11 +1145,11 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
     log(f"Final page reached: {page}")
     log(f"API exhausted: {api_exhausted}")
     
-    # CRITICAL: Strict duration check - pipeline must never continue with insufficient duration
-    if downloaded_duration < required_duration:
+    # CRITICAL: Strict duration check based on AUDIO AUTHORITY
+    if downloaded_duration < target_duration:
         error_msg = (
-            f"❌ FATAL: Downloaded duration ({downloaded_duration:.1f}s) "
-            f"is less than required ({required_duration:.1f}s) even after exhaustive search "
+            f"❌ FATAL: Downloaded cumulative duration ({downloaded_duration:.1f}s) "
+            f"is less than AUDIO AUTHORITY target ({target_duration:.1f}s) even after exhaustive search "
             f"({total_searched_pages} pages, API exhausted: {api_exhausted}). "
             f"Cannot proceed with black video sections. "
             f"Pipeline must stop immediately."
@@ -1107,12 +1157,18 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
         log(error_msg, "ERROR")
         raise RuntimeError(error_msg)
     
-    # Step 6: Save manifest with real clips only
+    if downloaded_duration > max_allowed_duration:
+        log(f"⚠️ WARNING: Cumulative duration exceeds max allowed by {downloaded_duration - max_allowed_duration:.1f}s")
+        log(f"   This is acceptable per rules - overflow clips are accepted")
+    
+    # Step 6: Save manifest with real clips only - INCLUDE CUMULATIVE DURATION
     manifest = {
         'run_id': run_id,
         'video_type': video_type,
+        'audio_authority_target': target_duration,  # Single source of truth
         'target_duration': target_duration,
-        'required_duration': required_duration,
+        'max_allowed_duration': max_allowed_duration,
+        'total_clip_duration': downloaded_duration,  # Cumulative total
         'downloaded_duration': downloaded_duration,
         'clips_downloaded': len(downloaded_clips),
         'clips_skipped': skipped_count,
@@ -1128,15 +1184,18 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
         json.dump(manifest, f, indent=2)
     
     log(f"✅ Manifest saved: {MANIFEST_FILE}")
-    log(f"✅ Contains {len(downloaded_clips)} real clips with total duration {downloaded_duration:.2f}s")
+    log(f"✅ Contains {len(downloaded_clips)} real clips")
+    log(f"✅ CUMULATIVE total duration: {downloaded_duration:.2f}s")
+    log(f"✅ AUDIO AUTHORITY target: {target_duration:.2f}s")
+    log(f"✅ Difference: {downloaded_duration - target_duration:+.2f}s")
     
     # Step 7: Final verification before returning
     final_clips, final_duration = verify_and_repair_manifest(MANIFEST_FILE, CLIPS_DIR, video_type, firebase)
     
-    if final_duration < required_duration:
+    if final_duration < target_duration:
         error_msg = (
             f"❌ FATAL: Post-verification duration ({final_duration:.1f}s) "
-            f"is less than required ({required_duration:.1f}s). "
+            f"is less than AUDIO AUTHORITY target ({target_duration:.1f}s). "
             f"Some clips failed final validation. Cannot proceed."
         )
         log(error_msg, "ERROR")
@@ -1149,7 +1208,7 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
 # ============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description='Acquire stock footage from Pexels - PRODUCTION MODE')
+    parser = argparse.ArgumentParser(description='Acquire stock footage from Pexels - PRODUCTION MODE - AUDIO DURATION AUTHORITY')
     parser.add_argument('--script-file', required=True,
                        help='Path to script JSON (unused but kept for compatibility)')
     parser.add_argument('--run-id', required=True,
@@ -1167,7 +1226,7 @@ def main():
             args.run_id
         )
         
-        log(f"✅ Asset acquisition complete - Manifest created with real clips")
+        log(f"✅ Asset acquisition complete - Manifest created with real clips based on AUDIO AUTHORITY")
         
     except RuntimeError as e:
         log(f"❌ FATAL: {e}", "ERROR")
