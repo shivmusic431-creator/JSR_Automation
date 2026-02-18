@@ -160,14 +160,18 @@ class YouTubeUploader:
             try:
                 token_data = self._get_token_from_firestore()
                 
-                # Create credentials object
+                # Create credentials object with explicit full YouTube scopes
+                # Using both youtube.upload and youtube scopes to ensure all operations succeed
                 credentials = Credentials(
                     token=token_data['token'],
                     refresh_token=token_data['refresh_token'],
                     token_uri=token_data['token_uri'],
                     client_id=token_data['client_id'],
                     client_secret=token_data['client_secret'],
-                    scopes=token_data['scopes']
+                    scopes=[
+                        'https://www.googleapis.com/auth/youtube.upload',
+                        'https://www.googleapis.com/auth/youtube'
+                    ]
                 )
                 
                 # Refresh if needed
