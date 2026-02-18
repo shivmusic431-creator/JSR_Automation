@@ -6,6 +6,7 @@ Uses script-based subtitle generation - 100% accurate, no speech recognition
 Features:
 - 100% ACCURATE SUBTITLES - Direct from script text
 - PERFECT SYNC with final audio duration (frame-level precision)
+- AUDIO DURATION AUTHORITY - Uses ACTUAL audio duration from ffprobe
 - PROFESSIONAL DENSITY - Dynamically adjusted for video length
 - PROGRESSIVE SUBTITLES - Phrase-level segmentation for cinematic appearance
 - CLEAN TEXT - No emotion indicators or scene markers in subtitles
@@ -28,13 +29,18 @@ from typing import List, Dict, Optional, Tuple
 # DYNAMIC AUDIO FILE DETECTION (PRODUCTION SAFE)
 # ============================================================================
 
-def find_latest_audio_file(output_dir="output"):
+def find_latest_audio_file(output_dir="output", video_type="long"):
     """
     Dynamically find the latest audio WAV file in the output directory.
 
     Priority:
-    1. Preferred names: audio.wav, final_audio.wav
-    2. Most recently modified .wav file
+    1. For long: audio_long.wav, audio.wav, final_audio.wav
+    2. For short: audio_short.wav
+    3. Most recently modified .wav file
+
+    Args:
+        output_dir: Output directory path
+        video_type: 'long' or 'short'
 
     Returns:
         Path object pointing to detected audio file
@@ -47,13 +53,20 @@ def find_latest_audio_file(output_dir="output"):
     if not output_path.exists():
         raise FileNotFoundError(f"❌ Output directory not found: {output_dir}")
 
-    # Preferred filenames (XTTS standard outputs)
-    preferred_names = [
-        "audio_long.wav",
-        "audio_short.wav",
-        "audio.wav",
-        "final_audio.wav"
-    ]
+    # Preferred filenames based on video type
+    if video_type == "short":
+        preferred_names = [
+            "audio_short.wav",
+            "short_audio.wav",
+            "audio.wav",
+            "final_audio.wav"
+        ]
+    else:
+        preferred_names = [
+            "audio_long.wav",
+            "audio.wav",
+            "final_audio.wav"
+        ]
 
     # Step 1: Check preferred filenames first
     for name in preferred_names:
@@ -197,12 +210,13 @@ def load_script(script_file: Path) -> str:
 
 
 # ============================================================================
-# AUDIO DURATION DETECTION
+# AUDIO DURATION DETECTION - SINGLE SOURCE OF TRUTH
 # ============================================================================
 
 def get_audio_duration(audio_file: Path) -> float:
     """
     Get audio duration using ffprobe with frame-level precision.
+    AUDIO DURATION IS THE SINGLE SOURCE OF TRUTH for subtitle timing.
     
     Args:
         audio_file: Path to audio file
@@ -213,7 +227,7 @@ def get_audio_duration(audio_file: Path) -> float:
     Raises:
         RuntimeError: If ffprobe fails
     """
-    log(f"🎵 Getting audio duration: {audio_file}")
+    log(f"🎵 Getting AUDIO AUTHORITY duration from: {audio_file}")
     
     cmd = [
         'ffprobe', '-v', 'error',
@@ -229,7 +243,7 @@ def get_audio_duration(audio_file: Path) -> float:
         # Format duration for logging
         minutes = int(duration // 60)
         seconds = duration % 60
-        log(f"⏱️ Audio duration: {minutes}:{seconds:05.3f} (total {duration:.6f}s)")
+        log(f"⏱️ AUDIO AUTHORITY duration: {minutes}:{seconds:05.3f} (total {duration:.6f}s)")
         
         return duration
     except subprocess.CalledProcessError as e:
@@ -321,14 +335,14 @@ def segment_into_phrases_professional(text: str, total_duration: float) -> List[
     
     Args:
         text: Clean text without metadata
-        total_duration: Total audio duration in seconds
+        total_duration: Total audio duration in seconds (AUDIO AUTHORITY)
         
     Returns:
         List of phrase segments optimized for video length
     """
-    # Calculate target number of segments
+    # Calculate target number of segments based on AUDIO AUTHORITY duration
     target_segments = calculate_target_segments(total_duration)
-    log(f"🎯 Target subtitle segments: {target_segments} for {total_duration:.1f}s video")
+    log(f"🎯 Target subtitle segments: {target_segments} for {total_duration:.1f}s video (AUDIO AUTHORITY)")
     
     # First, split on major punctuation to get natural phrases
     # Split on sentence endings (।, ?, !) and major pauses (comma, semicolon)
@@ -438,7 +452,7 @@ def segment_into_phrases_professional(text: str, total_duration: float) -> List[
 
 
 # ============================================================================
-# EXACT PROPORTIONAL TIMING (NO CLAMPING DISTORTION)
+# EXACT PROPORTIONAL TIMING (NO CLAMPING DISTORTION) - USING AUDIO AUTHORITY
 # ============================================================================
 
 def calculate_exact_proportional_timing(
@@ -450,10 +464,11 @@ def calculate_exact_proportional_timing(
     
     CRITICAL: No duration clamping - timing is purely proportional.
     Sum of all durations equals total_duration exactly.
+    Uses AUDIO AUTHORITY duration as total_duration.
     
     Args:
         segments: List of text segments
-        total_duration: Total audio duration in seconds (high precision)
+        total_duration: Total audio duration in seconds (AUDIO AUTHORITY - high precision)
         
     Returns:
         List of (start_time, end_time) tuples with continuous coverage
@@ -490,7 +505,7 @@ def calculate_exact_proportional_timing(
     
     last_end = timings[-1][1]
     assert abs(last_end - total_duration) < 1e-6, \
-        f"Last segment must end at total_duration ({total_duration}), got {last_end}"
+        f"Last segment must end at AUDIO AUTHORITY duration ({total_duration}), got {last_end}"
     
     # Verify no gaps or overlaps (continuous coverage)
     for i in range(1, len(timings)):
@@ -526,7 +541,7 @@ def format_timestamp(seconds: float) -> str:
 
 
 # ============================================================================
-# SUBTITLE GENERATION (PROFESSIONAL GRADE)
+# SUBTITLE GENERATION (PROFESSIONAL GRADE) - AUDIO DURATION AUTHORITY
 # ============================================================================
 
 def generate_subtitles_from_script(
@@ -543,22 +558,24 @@ def generate_subtitles_from_script(
     - EXACT TIMING: Purely proportional, no clamping distortion
     - PERFECT SYNC: Frame-level precision matching audio duration
     - CONTINUOUS COVERAGE: No gaps or overlaps
+    - AUDIO DURATION AUTHORITY: Uses ACTUAL audio duration from ffprobe
     
     Args:
         script_text: Full script text (may contain metadata)
-        audio_duration: Total audio duration in seconds (high precision)
+        audio_duration: Total audio duration in seconds (AUDIO AUTHORITY - high precision)
         output_path: Path to output SRT file
         
     Returns:
         True if successful
     """
     log("=" * 80)
-    log("🎬 PROFESSIONAL SUBTITLE GENERATION")
+    log("🎬 PROFESSIONAL SUBTITLE GENERATION - AUDIO DURATION AUTHORITY")
     log("=" * 80)
     log("⚡ CLEAN TEXT - No emotion indicators or scene markers")
     log("⚡ PROFESSIONAL DENSITY - Optimized for video length")
     log("⚡ EXACT TIMING - No clamping distortion")
-    log("⚡ PERFECT SYNC - Frame-level precision")
+    log("⚡ PERFECT SYNC - Frame-level precision with AUDIO AUTHORITY")
+    log(f"⚡ AUDIO AUTHORITY duration: {audio_duration:.6f}s")
     log("=" * 80)
     
     # Step 1: Remove all non-spoken metadata
@@ -585,18 +602,18 @@ def generate_subtitles_from_script(
     if len(segments) > 5:
         log(f"   ... and {len(segments) - 5} more")
     
-    # Step 3: Calculate exact proportional timing (NO CLAMPING)
+    # Step 3: Calculate exact proportional timing using AUDIO AUTHORITY duration
     log(f"⏱️ Calculating exact proportional timing for {len(segments)} segments")
-    log(f"   Total duration: {audio_duration:.6f}s")
+    log(f"   AUDIO AUTHORITY duration: {audio_duration:.6f}s")
     
     timings = calculate_exact_proportional_timing(segments, audio_duration)
     
     # Validate timing precision
     first_start = timings[0][0]
     last_end = timings[-1][1]
-    log(f"✅ Timing validation:")
+    log(f"✅ Timing validation based on AUDIO AUTHORITY:")
     log(f"   First segment start: {first_start:.6f}s (must be 0.0)")
-    log(f"   Last segment end: {last_end:.6f}s (must equal {audio_duration:.6f}s)")
+    log(f"   Last segment end: {last_end:.6f}s (must equal AUDIO AUTHORITY: {audio_duration:.6f}s)")
     log(f"   Total segments: {len(timings)}")
     log(f"   Avg segment duration: {audio_duration/len(timings):.3f}s")
     
@@ -635,6 +652,7 @@ def generate_subtitles_from_script(
             log("=" * 80)
             log(f"   Output file: {output_path}")
             log(f"   Subtitles written: {actual_count}")
+            log(f"   AUDIO AUTHORITY duration: {audio_duration:.6f}s")
             log(f"   Target density: {calculate_target_segments(audio_duration)}")
             log(f"   Average duration: {audio_duration/actual_count:.3f}s")
             log(f"   File size: {output_path.stat().st_size / 1024:.2f} KB")
@@ -652,8 +670,8 @@ def generate_subtitles_from_script(
             else:
                 log(f"✅ No metadata characters detected")
             
-            # Verify timing precision
-            log(f"✅ Frame-level sync achieved: {audio_duration:.6f}s total")
+            # Verify timing precision based on AUDIO AUTHORITY
+            log(f"✅ Frame-level sync achieved: {audio_duration:.6f}s total (AUDIO AUTHORITY)")
             
             return True
         else:
@@ -671,7 +689,7 @@ def generate_subtitles_from_script(
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Generate professional subtitles from script (NO speech recognition)'
+        description='Generate professional subtitles from script (NO speech recognition) - AUDIO DURATION AUTHORITY'
     )
     parser.add_argument('--run-id', required=True, help='Run ID for logging')
     parser.add_argument('--force', action='store_true', 
@@ -682,18 +700,21 @@ def main():
                        help='Path to script JSON file')
     parser.add_argument('--output-file', default='output/subtitles.srt',
                        help='Path to output SRT file')
+    parser.add_argument('--video-type', choices=['long', 'short'], default='long',
+                       help='Video type for audio file detection')
     
     args = parser.parse_args()
     
     log("=" * 80)
     log(f"📝 PROFESSIONAL SUBTITLE GENERATION - Run ID: {args.run_id}")
+    log(f"   AUDIO DURATION AUTHORITY: ENABLED")
     log("=" * 80)
     
     start_time = time.time()
     
-    # Step 1: Find audio file
+    # Step 1: Find audio file based on video type
     try:
-        audio_file = find_latest_audio_file(args.audio_dir)
+        audio_file = find_latest_audio_file(args.audio_dir, args.video_type)
         log(f"🎯 Using audio file: {audio_file}")
     except FileNotFoundError as e:
         log(f"❌ {e}")
@@ -712,14 +733,14 @@ def main():
         log(f"❌ Script loading failed: {e}")
         sys.exit(1)
     
-    # Step 4: Get audio duration with high precision
+    # Step 4: Get AUDIO AUTHORITY duration with high precision
     try:
         audio_duration = get_audio_duration(audio_file)
     except RuntimeError as e:
         log(f"❌ Audio duration detection failed: {e}")
         sys.exit(1)
     
-    # Step 5: Generate subtitles
+    # Step 5: Generate subtitles using AUDIO AUTHORITY duration
     output_path = Path(args.output_file)
     
     # Skip if exists and not forced
@@ -730,7 +751,7 @@ def main():
     
     success = generate_subtitles_from_script(
         script_text=script_text,
-        audio_duration=audio_duration,
+        audio_duration=audio_duration,  # AUDIO AUTHORITY duration
         output_path=output_path
     )
     
@@ -741,6 +762,7 @@ def main():
         log("=" * 80)
         log(f"✅ PROFESSIONAL SUBTITLE GENERATION SUCCESSFUL")
         log(f"   Output: {output_path}")
+        log(f"   AUDIO AUTHORITY duration: {audio_duration:.6f}s")
         log(f"   Generation time: {elapsed_time:.2f}s")
         log(f"   Speed: {audio_duration/elapsed_time:.1f}x realtime")
         log("=" * 80)
