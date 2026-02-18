@@ -413,7 +413,7 @@ jobs:
           path: output/subtitles_${{ matrix.audio-type }}.srt
           retention-days: 1
 
-  # Phase 4: Asset Acquisition for Long Video
+  # Phase 4: Asset Acquisition for Long Video - PRODUCTION MODE (NO DURATION ARG)
   acquire-assets-long:
     runs-on: ubuntu-latest
     needs: [generate-audio-long, generate-subtitles]
@@ -448,23 +448,17 @@ jobs:
           name: audio-long-${{ env.RUN_ID }}
           path: output/
 
-      - name: Get Audio Duration
-        id: get_duration
-        run: |
-          DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 output/audio_long.wav)
-          echo "duration=$DURATION" >> $GITHUB_OUTPUT
-
-      - name: Download Stock Footage for Long Video
+      - name: Download Stock Footage for Long Video - PRODUCTION MODE
         id: assets
         env:
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
         run: |
+          # PRODUCTION MODE: No duration argument passed - auto-detection inside script
           python src/video_generation/acquire_assets.py \
             --script-file output/script_long.json \
             --run-id "$RUN_ID" \
-            --video-type long \
-            --duration ${{ steps.get_duration.outputs.duration }}
+            --video-type long
 
       - name: Upload Long Assets Artifact
         uses: actions/upload-artifact@v4
@@ -485,7 +479,7 @@ jobs:
             --status "${{ job.status }}" \
             --video-type "long"
 
-  # Phase 4.5: Asset Acquisition for Short Video (COMPLETELY SEPARATE)
+  # Phase 4.5: Asset Acquisition for Short Video - PRODUCTION MODE (NO DURATION ARG)
   acquire-assets-short:
     runs-on: ubuntu-latest
     needs: [generate-audio-short, generate-subtitles]
@@ -520,23 +514,17 @@ jobs:
           name: audio-short-${{ env.RUN_ID }}
           path: output/
 
-      - name: Get Audio Duration
-        id: get_duration
-        run: |
-          DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 output/audio_short.wav)
-          echo "duration=$DURATION" >> $GITHUB_OUTPUT
-
-      - name: Download Stock Footage for Short Video
+      - name: Download Stock Footage for Short Video - PRODUCTION MODE
         id: assets
         env:
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
         run: |
+          # PRODUCTION MODE: No duration argument passed - auto-detection inside script
           python src/video_generation/acquire_assets.py \
             --script-file output/script_short.json \
             --run-id "$RUN_ID" \
-            --video-type short \
-            --duration ${{ steps.get_duration.outputs.duration }}
+            --video-type short
 
       - name: Upload Short Assets Artifact
         uses: actions/upload-artifact@v4
