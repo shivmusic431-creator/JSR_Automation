@@ -4,6 +4,7 @@ Asset Acquisition - Downloads stock footage from Pexels based on target audio du
 Uses open search strategy and prevents clip reuse via Firebase
 Includes strict video validation to reject static images and low-quality clips
 NOW WITH TRUE UNLIMITED PAGINATION - Continues until API returns no results
+STRICT PRODUCTION MODE - No test manifests, always acquires real clips
 """
 import os
 import json
@@ -15,6 +16,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple, Set
 import sys
+import glob
 
 # Firebase imports
 try:
@@ -324,15 +326,60 @@ class FirebaseManager:
             log(f"Failed to mark clip {clip_id} as used: {e}", "WARNING")
 
 # ============================================================================
-# AUDIO DURATION EXTRACTION
+# AUDIO DURATION EXTRACTION - AUTO-DETECT WITH PROPER PRIORITY
 # ============================================================================
 
-def get_audio_duration(audio_file: Path) -> float:
+def find_audio_file() -> Path:
+    """
+    Auto-detect audio file using priority order:
+    1. audio_long.wav
+    2. audio_short.wav  
+    3. audio.wav
+    4. final_audio.wav
+    5. output.wav
+    6. Newest .wav file in output directory
+    
+    Returns:
+        Path to audio file
+        
+    Raises:
+        RuntimeError: If no audio file found
+    """
+    if not OUTPUT_DIR.exists():
+        raise RuntimeError(f"Output directory not found: {OUTPUT_DIR}")
+    
+    # Priority order
+    priority_files = [
+        OUTPUT_DIR / 'audio_long.wav',
+        OUTPUT_DIR / 'audio_short.wav',
+        OUTPUT_DIR / 'audio.wav',
+        OUTPUT_DIR / 'final_audio.wav',
+        OUTPUT_DIR / 'output.wav'
+    ]
+    
+    # Check priority files in order
+    for audio_file in priority_files:
+        if audio_file.exists():
+            log(f"🎵 Found audio file: {audio_file.name}")
+            return audio_file
+    
+    # Fallback: find newest .wav file
+    wav_files = list(OUTPUT_DIR.glob('*.wav'))
+    if wav_files:
+        # Get newest by modification time
+        newest = max(wav_files, key=lambda f: f.stat().st_mtime)
+        log(f"🎵 Using newest audio file: {newest.name}")
+        return newest
+    
+    # No audio files found
+    raise RuntimeError(f"No audio file found in {OUTPUT_DIR}")
+
+def get_audio_duration(audio_file: Path = None) -> float:
     """
     Get audio duration using ffprobe
     
     Args:
-        audio_file: Path to audio file
+        audio_file: Path to audio file (optional, auto-detected if None)
         
     Returns:
         Duration in seconds
@@ -340,6 +387,9 @@ def get_audio_duration(audio_file: Path) -> float:
     Raises:
         RuntimeError: If duration cannot be determined
     """
+    if audio_file is None:
+        audio_file = find_audio_file()
+    
     if not audio_file.exists():
         raise RuntimeError(f"Audio file not found: {audio_file}")
     
@@ -787,14 +837,15 @@ def get_clip_duration(clip_path: Path) -> float:
         return 0.0
 
 # ============================================================================
-# MAIN ACQUISITION FUNCTION - WITH TRUE UNLIMITED PAGINATION
+# MAIN ACQUISITION FUNCTION - PRODUCTION ONLY - NO TEST MODE
 # ============================================================================
 
 def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
     """
     Acquire stock footage based on audio duration requirement
+    STRICT PRODUCTION MODE: Always detects audio and downloads real clips
     Includes strict validation to reject static images and low-quality clips
-    NOW WITH TRUE UNLIMITED PAGINATION - Continues until API returns no results
+    TRUE UNLIMITED PAGINATION - Continues until API returns no results
     
     Args:
         script_file: Path to script JSON (unused but kept for compatibility)
@@ -809,29 +860,23 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
     """
     
     log("=" * 80)
-    log("🎬 ASSET ACQUISITION - TRUE UNLIMITED PAGINATION MODE")
+    log("🎬 ASSET ACQUISITION - PRODUCTION MODE (NO TEST MANIFESTS)")
     log("=" * 80)
     log(f"Run ID: {run_id}")
     log(f"Video type: {video_type}")
     
-    # Step 1: Get audio duration
-    audio_file = OUTPUT_DIR / 'audio.wav'
-    if not audio_file.exists():
-        # Try alternative names
-        alternatives = [
-            OUTPUT_DIR / 'final_audio.wav',
-            OUTPUT_DIR / 'output.wav'
-        ]
-        for alt in alternatives:
-            if alt.exists():
-                audio_file = alt
-                break
-    
-    target_duration = get_audio_duration(audio_file)
+    # Step 1: Auto-detect audio file and get duration
+    try:
+        audio_file = find_audio_file()
+        target_duration = get_audio_duration(audio_file)
+    except RuntimeError as e:
+        log(f"❌ {e}", "ERROR")
+        raise
     
     # FIX: Limit Shorts duration to 58 seconds
-    if video_type == 'short':
-        target_duration = min(target_duration, 58)
+    if video_type == 'short' and target_duration > 58:
+        log(f"⚠️ Short video duration exceeds 58s, limiting to 58s")
+        target_duration = 58
     
     log(f"🎯 Target duration: {target_duration:.2f}s ({target_duration/60:.2f}m)")
     
@@ -1048,6 +1093,7 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
     log(f"Validation failures: {validation_failures}")
     log(f"Pages searched: {total_searched_pages}")
     log(f"Final page reached: {page}")
+    log(f"API exhausted: {api_exhausted}")
     
     # CRITICAL: Strict duration check - pipeline must never continue with insufficient duration
     if downloaded_duration < required_duration:
@@ -1061,7 +1107,7 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
         log(error_msg, "ERROR")
         raise RuntimeError(error_msg)
     
-    # Step 6: Save manifest
+    # Step 6: Save manifest with real clips only
     manifest = {
         'run_id': run_id,
         'video_type': video_type,
@@ -1082,6 +1128,7 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
         json.dump(manifest, f, indent=2)
     
     log(f"✅ Manifest saved: {MANIFEST_FILE}")
+    log(f"✅ Contains {len(downloaded_clips)} real clips with total duration {downloaded_duration:.2f}s")
     
     # Step 7: Final verification before returning
     final_clips, final_duration = verify_and_repair_manifest(MANIFEST_FILE, CLIPS_DIR, video_type, firebase)
@@ -1098,15 +1145,13 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
     return MANIFEST_FILE
 
 # ============================================================================
-# CLI ENTRY POINT
+# CLI ENTRY POINT - STRICT PRODUCTION MODE
 # ============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description='Acquire stock footage from Pexels with TRUE UNLIMITED PAGINATION')
+    parser = argparse.ArgumentParser(description='Acquire stock footage from Pexels - PRODUCTION MODE')
     parser.add_argument('--script-file', required=True,
                        help='Path to script JSON (unused but kept for compatibility)')
-    parser.add_argument('--duration', type=float, required=False,
-                       help='Target duration (overrides audio detection)')
     parser.add_argument('--run-id', required=True,
                        help='Run identifier')
     parser.add_argument('--video-type', choices=['long', 'short'], default='long',
@@ -1115,42 +1160,14 @@ def main():
     args = parser.parse_args()
     
     try:
-        # Override duration if provided (for testing)
-        if args.duration:
-            log(f"Using provided duration: {args.duration}s")
-            
-            # Mock manifest for testing
-            CLIPS_DIR.mkdir(parents=True, exist_ok=True)
-            manifest = {
-                'run_id': args.run_id,
-                'video_type': args.video_type,
-                'target_duration': args.duration,
-                'required_duration': args.duration * 1.05,
-                'downloaded_duration': args.duration,
-                'clips_downloaded': 0,
-                'clips_skipped': 0,
-                'validation_failures': 0,
-                'pages_searched': 1,
-                'final_page': 1,
-                'clips': [],
-                'generated_at': datetime.now().isoformat(),
-                'note': 'Duration override - no actual downloads'
-            }
-            
-            with open(MANIFEST_FILE, 'w', encoding='utf-8') as f:
-                json.dump(manifest, f, indent=2)
-            
-            log(f"✅ Test manifest created: {MANIFEST_FILE}")
-            return
-        
-        # Normal acquisition with true unlimited pagination
+        # PRODUCTION MODE ONLY: Always acquire real clips, never create test manifests
         manifest_path = acquire_assets(
             args.script_file,
             args.video_type,
             args.run_id
         )
         
-        log(f"✅ Asset acquisition complete with TRUE UNLIMITED PAGINATION")
+        log(f"✅ Asset acquisition complete - Manifest created with real clips")
         
     except RuntimeError as e:
         log(f"❌ FATAL: {e}", "ERROR")
