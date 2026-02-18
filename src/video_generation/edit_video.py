@@ -25,6 +25,79 @@ def log(message: str, level: str = "INFO"):
     print(f"[{timestamp}] {level}: {message}")
     sys.stdout.flush()
 
+
+# ============================================================================
+# AUDIO DURATION DETECTION - FIX FOR NAMERROR
+# ============================================================================
+
+def get_audio_duration(audio_file: str) -> float:
+    """
+    Get audio duration in seconds using ffprobe.
+    Must be reliable for WAV files in GitHub Actions environment.
+    
+    Args:
+        audio_file: Path to audio file (WAV format)
+        
+    Returns:
+        Duration in seconds as float
+        
+    Raises:
+        FileNotFoundError: If audio file doesn't exist
+        RuntimeError: If ffprobe fails or returns invalid duration
+    """
+    audio_path = Path(audio_file)
+    
+    # Check if file exists
+    if not audio_path.exists():
+        raise FileNotFoundError(f"Audio file not found: {audio_file}")
+    
+    log(f"🔍 Detecting audio duration: {audio_file}")
+    
+    # Build ffprobe command
+    cmd = [
+        'ffprobe',
+        '-v', 'error',
+        '-show_entries', 'format=duration',
+        '-of', 'json',
+        str(audio_path)
+    ]
+    
+    try:
+        # Run ffprobe
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10  # Prevent hanging in CI
+        )
+        
+        # Parse JSON output
+        data = json.loads(result.stdout)
+        
+        # Extract duration
+        if 'format' in data and 'duration' in data['format']:
+            duration = float(data['format']['duration'])
+            
+            # Validate duration is positive and reasonable
+            if duration <= 0:
+                raise RuntimeError(f"Invalid duration detected: {duration}s")
+                
+            log(f"✅ Audio duration: {duration:.2f}s ({duration/60:.2f}m)")
+            return duration
+        else:
+            raise RuntimeError("Duration field not found in ffprobe output")
+            
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("ffprobe timed out after 10 seconds")
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"ffprobe failed with code {e.returncode}: {e.stderr}")
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"Failed to parse ffprobe JSON output: {e}")
+    except ValueError as e:
+        raise RuntimeError(f"Duration is not a valid float: {e}")
+
+
 # ============================================================================
 # PREMIUM FONT CONFIGURATION
 # ============================================================================
