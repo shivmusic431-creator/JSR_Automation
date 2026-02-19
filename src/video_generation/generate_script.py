@@ -19,6 +19,7 @@ FIXES:
 - FIXED: Added response_mime_type="application/json" to force structured JSON output
 - FIXED: Enhanced response handling to capture JSON from candidates when text field is empty
 - FIXED: Sentence terminator validation now handles quoted sentences properly
+- **FIXED: SHORT script normalization - ensures script_short.json always contains valid "chunks" array**
 """
 import os
 import json
@@ -1376,9 +1377,51 @@ def generate_script(category, sub_category, episode, run_id, video_type='long'):
         
         if video_type == 'short':
             output_file = output_dir / 'script_short.json'
+            
+            # ===== SHORT SCRIPT NORMALIZATION (SAFE FIX) =====
+            # Ensure script_short.json always contains valid "chunks" array
+            # If chunks already exist, do nothing
+            if "chunks" not in script_data:
+                print("🔄 Normalizing SHORT script to chunks format...")
+                
+                # Extract script text safely
+                script_text = (
+                    script_data.get("script", {}).get("full_text") or
+                    script_data.get("full_script") or
+                    ""
+                ).strip()
+                
+                if not script_text:
+                    raise RuntimeError("SHORT script is empty, cannot normalize")
+                
+                # Convert to required chunks format
+                script_data = {
+                    "chunks": [
+                        {
+                            "chunk_id": 1,
+                            "text": script_text
+                        }
+                    ],
+                    "full_script": script_text,
+                    "script": {
+                        "full_text": script_text,
+                        "word_count": len(script_text.split()),
+                        "estimated_duration": script_data.get('script', {}).get('estimated_duration', '50 seconds')
+                    },
+                    "metadata": script_data.get('metadata', {
+                        'category': category,
+                        'sub_category': sub_category,
+                        'episode': episode,
+                        'full_video_title': title
+                    }),
+                    "generation_info": script_data.get('generation_info', {})
+                }
+                
+                print(f"✅ SHORT script normalized: {len(script_text.split())} words, single chunk")
         else:
             output_file = output_dir / 'script_long.json'
         
+        # Write the final script data
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(script_data, f, ensure_ascii=False, indent=2)
         
