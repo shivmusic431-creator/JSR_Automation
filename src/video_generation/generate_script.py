@@ -12,7 +12,7 @@ FIXES:
 - Optimized for Coqui XTTS Hindi voice generation
 - Emotion indicators strictly on separate lines for XTTS metadata
 - SUPPORTS SEPARATE SHORTS SCRIPT GENERATION (not trimmed from long videos)
-- NEW: Gemini outputs scripts in pre-defined chunks (400-800 words each)
+- NEW: Gemini outputs scripts in pre-defined chunks (120-180 words each) - REDUCED SIZE TO PREVENT TRUNCATION
 - NEW: Complete sentences preserved across chunks
 - NEW: Zero word loss, zero overlap
 - NEW: PRODUCTION SAFETY - Chunk integrity validation stops pipeline on corruption
@@ -165,10 +165,11 @@ def create_long_script_prompt(category, sub_category, episode, title):
     XTTS optimization, and CRITICAL: DETERMINISTIC CHUNK GENERATION
     
     Gemini must output the script in pre-defined chunks:
-    - Each chunk: 400-800 words
+    - Each chunk: 120-180 words (STRICT LIMIT - reduced from 400-800 to prevent truncation)
     - Complete sentences ONLY (never split mid-sentence)
     - No overlap, no gaps, no missing words
     - Chunks concatenate perfectly to form full script
+    - Total response size must remain under safe limits - prefer more chunks with smaller size
     """
     
     hindi_category = CATEGORIES_CONFIG.get(category, {}).get("hindi_name", category)
@@ -341,20 +342,27 @@ The script must sound:
 
 You MUST split the entire script into logical chunks following these RULES:
 
-1. **CHUNK SIZE RULE:** Each chunk MUST contain 400-800 Hindi words
+1. **CHUNK SIZE RULE (STRICT LIMIT - PREVENTS TRUNCATION):** 
+   - Each chunk MUST contain between 120-180 Hindi words
+   - **NEVER exceed 180 words per chunk. This is a hard limit.**
+   - **Total response size must remain under safe limits. Prefer more chunks with smaller size.**
+
 2. **SENTENCE COMPLETENESS RULE:** Each chunk MUST end with a COMPLETE sentence (। ? !)
+
 3. **NO SPLIT RULE:** NEVER split a sentence between chunks
+
 4. **CONTINUITY RULE:** Chunks must flow naturally with no gaps or overlaps
+
 5. **WORD COUNT RULE:** Total words across ALL chunks = full script word count
 
-For a 10-15 minute script (1400-1900 words), you will typically create:
-- 3-4 chunks (for ~1400 words) or
-- 4-5 chunks (for ~1900 words)
+For a 10-15 minute script (1400-1900 words), you will create approximately:
+- 8-12 chunks (since each chunk is 120-180 words)
+- More chunks with smaller size ensures the JSON response stays under token limits
 
 **IMPORTANT CHUNKING GUIDELINES:**
-- Chunk 1: Should contain HOOK + PROBLEM AGITATION + PROMISE (400-800 words)
-- Middle chunks: MAIN CONTENT sections divided naturally (400-800 words each)
-- Final chunk: PRACTICAL TIPS + CONCLUSION (400-800 words)
+- Chunk 1: HOOK + beginning of PROBLEM AGITATION (120-180 words)
+- Middle chunks: Continue PROBLEM AGITATION, PROMISE, and MAIN CONTENT divided into small logical segments (120-180 words each)
+- Final chunks: PRACTICAL TIPS + CONCLUSION (120-180 words each)
 
 **CRITICAL OUTPUT INSTRUCTION:**
 You MUST return ONLY a valid JSON object. Do NOT include any explanation, preamble, or text before or after the JSON.
@@ -375,17 +383,17 @@ The JSON MUST have this EXACT structure:
   "chunks": [
     {{
       "chunk_id": 1,
-      "text": "Complete Hindi narration text for chunk 1 with emotional indicators like (गंभीर स्वर में) and scene markers [SCENE: type]. Must end with a complete sentence (। ? !). Word count: between 400-800 words."
+      "text": "Complete Hindi narration text for chunk 1 with emotional indicators like (गंभीर स्वर में) and scene markers [SCENE: type]. Must end with a complete sentence (। ? !). Word count: between 120-180 words."
     }},
     {{
       "chunk_id": 2,
-      "text": "Complete Hindi narration text for chunk 2 with emotional indicators and scene markers. Must start with the natural continuation from chunk 1. Must end with a complete sentence (। ? !). Word count: between 400-800 words."
+      "text": "Complete Hindi narration text for chunk 2 with emotional indicators and scene markers. Must start with the natural continuation from chunk 1. Must end with a complete sentence (। ? !). Word count: between 120-180 words."
     }},
     {{
       "chunk_id": 3,
-      "text": "Complete Hindi narration text for chunk 3 with emotional indicators and scene markers. Must start with the natural continuation from chunk 2. Must end with a complete sentence (। ? !). Word count: between 400-800 words."
+      "text": "Complete Hindi narration text for chunk 3 with emotional indicators and scene markers. Must start with the natural continuation from chunk 2. Must end with a complete sentence (। ? !). Word count: between 120-180 words."
     }}
-    // Add more chunks as needed (typically 3-5 total)
+    // Add more chunks as needed (typically 8-12 total for 1400-1900 word script)
   ],
   "full_script": "The COMPLETE concatenation of ALL chunks in order. This must be exactly chunk1.text + chunk2.text + chunk3.text + ... with no modifications.",
   "script": {{
@@ -400,12 +408,14 @@ The JSON MUST have this EXACT structure:
 - Verify that no sentence is split across chunks
 - Verify that total words in chunks = word_count in script
 - Verify that chunks cover 100% of the script content with no gaps
+- **Verify that NO chunk exceeds 180 words (this is a hard limit to prevent JSON truncation)**
 
 **ENSURE THE JSON IS COMPLETE AND VALID. DO NOT TRUNCATE ANY SECTION.**
 **REMEMBER: Pure Hindi (देवनागरी लिपि), NOT Hinglish**
 **REMEMBER: Emotional indicators must be on separate lines BEFORE sentences**
 **REMEMBER: Scene markers must be on separate lines, NOT spoken**
-**REMEMBER: CHUNKS MUST BE 400-800 WORDS EACH, COMPLETE SENTENCES ONLY**"""
+**REMEMBER: CHUNKS MUST BE 120-180 WORDS EACH (STRICT LIMIT), COMPLETE SENTENCES ONLY**
+**REMEMBER: USING MORE SMALLER CHUNKS IS BETTER THAN FEWER LARGE CHUNKS TO PREVENT TRUNCATION**"""
     
     return prompt
 
@@ -977,6 +987,7 @@ def validate_chunks_integrity(script_data: dict) -> bool:
     4. Each chunk's text ends with a sentence terminator (। ? !)
     5. Chunk IDs are sequential starting from 1 (1,2,3,... no gaps)
     6. full_script equals concatenation of all chunk texts in order
+    7. (SOFT WARNING) Check if any chunk exceeds 180 words (new rule)
     
     Args:
         script_data: Parsed script JSON data
@@ -1062,13 +1073,20 @@ def validate_chunks_integrity(script_data: dict) -> bool:
             print(f"   Chunk text ends with: ...{stripped_text[-50:]}")
             raise RuntimeError(error_msg)
         
+        # Rule 7: Check chunk size (warning only, not fatal)
+        word_count = len(text.split())
+        if word_count > 180:
+            print(f"⚠️ WARNING: Chunk {chunk_id} exceeds 180 words ({word_count} words). This may cause truncation in future runs.")
+        elif word_count < 120:
+            print(f"ℹ️ INFO: Chunk {chunk_id} is below 120 words ({word_count} words). Consider combining with adjacent chunk for optimal size.")
+        
         # Add to concatenated text for Rule 6
         concatenated_text += text
         
         # Increment expected ID
         expected_id += 1
         
-        print(f"   ✓ Chunk {chunk_id}: {len(text.split())} words, ends with '{stripped_text[-1]}'")
+        print(f"   ✓ Chunk {chunk_id}: {word_count} words, ends with '{stripped_text[-1]}'")
     
     # Rule 6: full_script must equal concatenation of chunks
     if "full_script" not in script_data:
