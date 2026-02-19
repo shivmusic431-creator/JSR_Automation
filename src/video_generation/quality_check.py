@@ -42,8 +42,8 @@ def check_video_duration(video_path: str, video_type: str) -> tuple:
         duration = float(result.stdout.strip())
         
         if video_type == 'long':
-            # Long video: minimum 10 minutes (600 seconds)
-            min_duration = 600
+            # Long video: minimum 6 minutes (600 seconds)
+            min_duration = 360
             if duration < min_duration:
                 return duration, False, f"Duration {duration/60:.2f}m is less than minimum {min_duration/60:.2f}m"
             else:
