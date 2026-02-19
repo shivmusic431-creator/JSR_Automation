@@ -18,6 +18,7 @@ FIXES:
 - NEW: PRODUCTION SAFETY - Chunk integrity validation stops pipeline on corruption
 - FIXED: Added response_mime_type="application/json" to force structured JSON output
 - FIXED: Enhanced response handling to capture JSON from candidates when text field is empty
+- FIXED: Sentence terminator validation now handles quoted sentences properly
 """
 import os
 import json
@@ -986,7 +987,7 @@ def validate_chunks_integrity(script_data: dict) -> bool:
     3. Each chunk contains:
        - "chunk_id" (integer)
        - "text" (non-empty string)
-    4. Each chunk's text ends with a sentence terminator (। ? !)
+    4. Each chunk's text ends with a sentence terminator (। ? !) - ignoring trailing quotes
     5. Chunk IDs are sequential starting from 1 (1,2,3,... no gaps)
     6. full_script equals concatenation of all chunk texts in order
     7. (SOFT WARNING) Check if any chunk exceeds 180 words (new rule)
@@ -1066,13 +1067,27 @@ def validate_chunks_integrity(script_data: dict) -> bool:
             raise RuntimeError(error_msg)
         
         # Rule 4: Each chunk's text must end with a sentence terminator
-        # Check last non-whitespace character for Hindi sentence terminators
+        # Find last meaningful character ignoring quotes and spaces
         stripped_text = text.rstrip()
-        if stripped_text and stripped_text[-1] not in ['।', '?', '!']:
-            error_msg = (f"Script integrity validation failed: Chunk {chunk_id} does not end with "
-                        f"sentence terminator (। ? !). Last char: '{stripped_text[-1]}'")
+        if stripped_text:
+            # Start with the last character
+            last_char = stripped_text[-1]
+            
+            # Remove trailing quotes if present
+            while last_char in ['"', "'", '”', '’'] and len(stripped_text) > 1:
+                stripped_text = stripped_text[:-1].rstrip()
+                last_char = stripped_text[-1]
+            
+            # Now validate sentence terminator
+            if last_char not in ['।', '?', '!']:
+                error_msg = (f"Script integrity validation failed: Chunk {chunk_id} does not end with "
+                            f"sentence terminator (। ? !). Last meaningful char: '{last_char}'")
+                print(f"❌ {error_msg}")
+                print(f"   Chunk text ends with: ...{text.rstrip()[-50:]}")
+                raise RuntimeError(error_msg)
+        else:
+            error_msg = f"Script integrity validation failed: Chunk {chunk_id} text contains only whitespace"
             print(f"❌ {error_msg}")
-            print(f"   Chunk text ends with: ...{stripped_text[-50:]}")
             raise RuntimeError(error_msg)
         
         # Rule 7: Check chunk size (warning only, not fatal)
@@ -1088,7 +1103,7 @@ def validate_chunks_integrity(script_data: dict) -> bool:
         # Increment expected ID
         expected_id += 1
         
-        print(f"   ✓ Chunk {chunk_id}: {word_count} words, ends with '{stripped_text[-1]}'")
+        print(f"   ✓ Chunk {chunk_id}: {word_count} words, ends with '{last_char}'")
     
     # Rule 6: full_script must equal concatenation of chunks
     if "full_script" not in script_data:
