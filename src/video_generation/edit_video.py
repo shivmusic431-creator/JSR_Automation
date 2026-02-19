@@ -1099,13 +1099,35 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
         str(assembled_video)
     ]
     
-    # Execute first pass (video assembly)
+    # Execute first pass (video assembly) - SAFE NON-BLOCKING EXECUTION
     log("🎬 Assembling video...")
     try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        # FIX: Use Popen with stream reading to prevent buffer deadlock
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1
+        )
+        
+        # Read stderr line by line to prevent buffer overflow
+        while True:
+            line = process.stderr.readline()
+            if not line and process.poll() is not None:
+                break
+            # Optionally log progress lines if needed
+            if line and 'time=' in line:
+                log(f"⏱️ Assembly progress: {line.strip()}")
+        
+        returncode = process.poll()
+        
+        if returncode != 0:
+            raise RuntimeError(f"FFmpeg assembly failed with code {returncode}")
+        
         log(f"✅ Video assembled: {assembled_video}")
-    except subprocess.CalledProcessError as e:
-        log(f"❌ Video assembly failed: {e.stderr if e.stderr else 'Unknown error'}")
+    except Exception as e:
+        log(f"❌ Video assembly failed: {e}")
         return None
     
     # Verify assembled video exists and has content
@@ -1475,13 +1497,35 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
         str(assembled_video)
     ]
     
-    # Execute first pass (video assembly)
+    # Execute first pass (video assembly) - SAFE NON-BLOCKING EXECUTION
     log("🎬 Assembling video...")
     try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        # FIX: Use Popen with stream reading to prevent buffer deadlock
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1
+        )
+        
+        # Read stderr line by line to prevent buffer overflow
+        while True:
+            line = process.stderr.readline()
+            if not line and process.poll() is not None:
+                break
+            # Optionally log progress lines if needed
+            if line and 'time=' in line:
+                log(f"⏱️ Assembly progress: {line.strip()}")
+        
+        returncode = process.poll()
+        
+        if returncode != 0:
+            raise RuntimeError(f"FFmpeg assembly failed with code {returncode}")
+        
         log(f"✅ Video assembled: {assembled_video}")
-    except subprocess.CalledProcessError as e:
-        log(f"❌ Video assembly failed: {e.stderr if e.stderr else 'Unknown error'}")
+    except Exception as e:
+        log(f"❌ Video assembly failed: {e}")
         return None
     
     # Verify assembled video exists and has content
