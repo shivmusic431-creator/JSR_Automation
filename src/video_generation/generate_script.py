@@ -20,7 +20,7 @@ FIXES:
 - FIXED: Enhanced response handling to capture JSON from candidates when text field is empty
 - FIXED: Sentence terminator validation now handles quoted sentences properly
 - **FIXED: SHORT script normalization - ensures script_short.json always contains valid "chunks" array**
-- **FIXED: Unicode punctuation normalization to handle Hindi danda (।) vs Chinese/Japanese full stop (。) mismatches**
+- **FIXED: Unicode punctuation normalization - prevents validation failures from visually identical punctuation marks**
 """
 import os
 import json
@@ -52,37 +52,134 @@ if not GEMINI_API_KEY:
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ============================================================================
-# UNICODE PUNCTUATION NORMALIZATION FUNCTION
+# UNICODE PUNCTUATION NORMALIZATION HELPER
 # ============================================================================
 
 def normalize_unicode_punctuation(text: str) -> str:
     """
-    Normalize Unicode punctuation to consistent characters.
-    
-    Fixes mismatches between visually identical but different Unicode characters:
-    - Chinese/Japanese full stop (。) → Hindi danda (।)
-    - Fullwidth dot (．) → ASCII dot (.)
-    - Fullwidth comma (，) → ASCII comma (,)
-    - Fullwidth exclamation (！) → ASCII exclamation (!)
-    - Fullwidth question (？) → ASCII question (?)
+    Normalize Unicode punctuation to ensure consistent comparison.
+    Converts visually similar but different Unicode characters to standard forms.
     
     Args:
-        text: Input text with potential Unicode punctuation variations
+        text: Input text
         
     Returns:
         Text with normalized punctuation
     """
     replacements = {
-        '。': '।',  # Chinese/Japanese full stop to Hindi danda
-        '．': '.',  # Fullwidth dot to ASCII dot
-        '，': ',',  # Fullwidth comma to ASCII comma
-        '！': '!',  # Fullwidth exclamation to ASCII exclamation
-        '？': '?'   # Fullwidth question to ASCII question
+        '。': '।',  # Chinese/Japanese full stop → Hindi danda
+        '．': '.',  # Fullwidth period → ASCII period
+        '，': ',',  # Fullwidth comma → ASCII comma
+        '！': '!',  # Fullwidth exclamation → ASCII exclamation
+        '？': '?'   # Fullwidth question → ASCII question
     }
     for wrong, correct in replacements.items():
         text = text.replace(wrong, correct)
     return text
 
+# Load category configurations
+CATEGORIES_CONFIG = {
+    "Human Psychology & Behavior": {
+        "hindi_name": "मानव मनोविज्ञान और व्यवहार",
+        "sub_categories": {
+            "Dark Psychology": "डार्क साइकोलॉजी",
+            "Life Hacks Psychology": "लाइफ हैक्स मनोविज्ञान",
+            "Behavioral Psychology": "व्यवहार मनोविज्ञान",
+            "Body Language Secrets": "बॉडी लैंग्वेज सीक्रेट्स"
+        }
+    },
+    "Hidden Historical Truths": {
+        "hindi_name": "इतिहास की छुपी सच्चाई",
+        "sub_categories": {
+            "Untold School History": "वो सच जो स्कूलों में नहीं पढ़ाए",
+            "Historical Conspiracies": "ऐतिहासिक षड्यंत्र",
+            "Real Stories of Kings": "राजाओं की असली कहानियां",
+            "Unknown Freedom Struggle": "स्वतंत्रता संग्राम के अनसुने पहलू"
+        }
+    },
+    "Politics Decoded": {
+        "hindi_name": "राजनीति का खेल",
+        "sub_categories": {
+            "Vote Bank Psychology": "वोट बैंक की साइकोलॉजी",
+            "Real Intent Behind Schemes": "स्कीमों का असली मकसद",
+            "Leader Manipulation": "नेताओं की मैनिपुलेशन ट्रिक्स",
+            "Election Strategies": "चुनावी रणनीतियां"
+        }
+    },
+    "Business Fundamentals": {
+        "hindi_name": "बिजनेस की बुनियाद",
+        "sub_categories": {
+            "Businessman Mindset": "बिजनेसमैन माइंडसेट",
+            "Building Systems": "सिस्टम बनाना सीखो",
+            "Money Works For You": "पैसे काम करें आप नहीं",
+            "Startup Psychology": "स्टार्टअप साइकोलॉजी"
+        }
+    },
+    "Education System Exposed": {
+        "hindi_name": "स्टडी सिस्टम रिव्यू",
+        "sub_categories": {
+            "Why Old Education Fails": "पुरानी पढ़ाई क्यों फेल है",
+            "School vs Real Life": "स्कूल vs रियल लाइफ",
+            "Real Education for Success": "सक्सेस की असली पढ़ाई",
+            "Daily Routine Mastery": "डेली रूटीन मास्टरी"
+        }
+    },
+    "Society Reality": {
+        "hindi_name": "समाज का सच",
+        "sub_categories": {
+            "Cycle of Poverty": "गरीबी का चक्र",
+            "Secrets of Rich Society": "अमीर समाज के रहस्य",
+            "Social Class Psychology": "सोशल क्लास साइकोलॉजी",
+            "Breaking the System": "ब्रेकिंग द सिस्टम"
+        }
+    },
+    "Communication Mastery": {
+        "hindi_name": "कम्युनिकेशन मास्टरी",
+        "sub_categories": {
+            "Presentation Psychology": "प्रेजेंटेशन साइकोलॉजी",
+            "Less Education More Impact": "कम पढ़े लिखे का जादू",
+            "Art of Speaking": "बोलने की कला",
+            "Impactful Writing": "प्रभावशाली लेखन"
+        }
+    },
+    "Human Life Reality": {
+        "hindi_name": "इंसानी जिंदगी की हकीकत",
+        "sub_categories": {
+            "Lies About Success": "सक्सेस का झूठ",
+            "Relations Marketplace": "रिश्तों का बाजार",
+            "Emotional Manipulation": "भावनाओं की दुकानदारी",
+            "Real Way of Living": "जीने का असली तरीका"
+        }
+    }
+}
+
+# Episode ideas database
+EPISODE_IDEAS = {
+    ("Human Psychology & Behavior", "Dark Psychology"): [
+        "Gaslighting: Kaise Log Tumhari Yaadashth Ko Control Karte Hain",
+        "Emotional Blackmail Ke 5 Chehre Jo Tum Pehchan Nahi Paate",
+        "Manipulation Ke 7 Signs - Pehchano Aur Bacho",
+        "Love Bombing: Pyar Ya Phasaav?",
+        "Toxic Log Kaise Tumhari Energy Churate Hain",
+        "Narcissist Ki Pehchan Kaise Karein?",
+        "Guilt Tripping Se Kaise Bachein?",
+        "Passive-Aggressive Behavior Samajhna",
+        "Trauma Bonding Kya Hai?",
+        "Toxic Workplace Se Kaise Nikle?"
+    ],
+    ("Human Psychology & Behavior", "Life Hacks Psychology"): [
+        "Baat Maanwane Ka Psychology",
+        "Interview Mein Select Hone Ke Tarike",
+        "First Impression Kaise Banaye?",
+        "Logon Ko Apni Taraf Kaise Karein?",
+        "Negotiation Ke Psychology Tricks",
+        "Memory Improve Karne Ke Tarike",
+        "Decision Making Ke Shortcuts",
+        "Social Anxiety Kaise Kam Karein?",
+        "Confidence Dikhane Ke Tarike",
+        "Influence Kaise Badhayein?"
+    ]
+}
 
 def get_episode_title(category, sub_category, episode):
     """Get episode title from database or generate"""
@@ -1049,7 +1146,7 @@ def validate_chunks_integrity(script_data: dict) -> bool:
         print(f"❌ {error_msg}")
         raise RuntimeError(error_msg)
     
-    # Normalize for comparison (remove extra whitespace AND normalize Unicode punctuation)
+    # Normalize for comparison (remove extra whitespace) with Unicode punctuation fix
     concatenated_normalized = normalize_unicode_punctuation(
         re.sub(r'\s+', ' ', concatenated_text.strip())
     )
