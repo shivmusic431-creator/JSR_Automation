@@ -19,6 +19,7 @@ Features:
 - ENHANCED CONFIDENCE: Optimized voice characteristics for authoritative narration
 - **FIX: Direct chunk loading from Gemini output - NO ScriptChunker used**
 - **FIX: 100% deterministic chunk boundaries from script.json**
+- **FIX: Safe session state update using chunk_id search instead of direct indexing**
 
 ARCHITECTURE:
 - Single model load per process (XTTS v2 optimization)
@@ -437,11 +438,30 @@ class SessionManager:
         return self.session
     
     def update_chunk_status(self, chunk: ChunkMetadata):
-        """Update chunk status in session"""
+        """
+        Update chunk status in session using safe search by chunk_id
+        
+        FIX: Replaced direct list indexing (chunk.chunk_id) with proper search
+        because chunk_id starts from 1 but Python list indices start from 0.
+        """
         if not self.session:
             return
         
-        self.session.chunks[chunk.chunk_id] = chunk.to_dict()
+        # SAFE REPLACEMENT: Search for chunk by ID instead of direct indexing
+        chunk_found = False
+        for i, existing_chunk in enumerate(self.session.chunks):
+            if existing_chunk['chunk_id'] == chunk.chunk_id:
+                self.session.chunks[i] = chunk.to_dict()
+                chunk_found = True
+                log(f"  ✓ Updated chunk {chunk.chunk_id} in session (found at index {i})")
+                break
+        
+        if not chunk_found:
+            error_msg = f"Chunk ID {chunk.chunk_id} not found in session"
+            log(f"❌ {error_msg}")
+            raise RuntimeError(error_msg)
+        
+        # Update session summary stats
         self.session.updated_at = datetime.now().isoformat()
         
         completed = sum(1 for c in self.session.chunks if c['status'] == ChunkStatus.COMPLETED.value)
@@ -1324,7 +1344,8 @@ class AudioGenerationOrchestrator:
                 'global_speed_optimization': True,
                 'global_speed_multiplier': FINAL_SPEED_MULTIPLIER,
                 'chunk_level_speed_disabled': True,
-                'voice_confidence_optimized': True
+                'voice_confidence_optimized': True,
+                'safe_session_update': True  # Added to track this fix
             }
         }
         
