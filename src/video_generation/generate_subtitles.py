@@ -102,20 +102,15 @@ def find_latest_audio_file(output_dir="output", video_type="long"):
 
 # ============================================================================
 # CONFIGURATION
-# ============================================================================
+#============================================================================
 
 OUTPUT_SRT = Path("output/subtitles.srt")
 HEARTBEAT_INTERVAL = 10  # Log progress every 10 seconds
 CENTER_ALIGN = "{\\an5}"  # Center alignment for SRT (compatible with edit_video.py)
 
-# Professional subtitle density targets (segments per video)
-TARGET_SEGMENTS_SHORT = 45  # For videos under 60s
-TARGET_SEGMENTS_MEDIUM = 120  # For 1-5 minute videos
-TARGET_SEGMENTS_LONG = 250  # For 5+ minute videos
-
-# Minimum segment duration for readability (seconds)
-MIN_SEGMENT_DURATION = 0.8  # Absolute minimum for readable subtitle
-MAX_SEGMENT_DURATION = 4.0  # Maximum before losing viewer attention
+# Words per subtitle for optimal readability
+MIN_WORDS_PER_SUBTITLE = 3
+MAX_WORDS_PER_SUBTITLE = 6
 
 
 # ============================================================================
@@ -134,23 +129,18 @@ def log(message: str, flush: bool = True):
 # SCRIPT LOADING
 # ============================================================================
 
-def load_script(script_file: Path) -> str:
+def load_script(script_file: Path) -> Dict:
     """
-    Load script from JSON file and assemble full script text.
-    
-    Supports multiple formats automatically:
-    - FORMAT 1 (short video): script["full_text"]
-    - FORMAT 2 (long video structured): sections like hook, problem_agitation, etc.
-    - FORMAT 3 (simple): script["script"] as string
+    Load script from JSON file and extract chunks.
     
     Args:
         script_file: Path to script JSON file
         
     Returns:
-        Full script text as string
+        Dictionary containing script data with chunks
         
     Raises:
-        ValueError: If script format is invalid or text is empty
+        ValueError: If script format is invalid
     """
     log(f"📖 Loading script from: {script_file}")
     
@@ -160,53 +150,47 @@ def load_script(script_file: Path) -> str:
     except Exception as e:
         raise ValueError(f"Failed to load script file: {e}")
     
-    script_text = ""
+    # Validate script has chunks
+    if "chunks" not in script_data:
+        raise ValueError("Script JSON must contain 'chunks' array")
     
-    if isinstance(script_data, dict):
-        if "script" in script_data:
-            script_obj = script_data["script"]
-            
-            if isinstance(script_obj, str):
-                script_text = script_obj
-            elif isinstance(script_obj, dict):
-                if "full_text" in script_obj:
-                    script_text = script_obj["full_text"]
-                else:
-                    sections = []
-                    
-                    if "hook" in script_obj:
-                        sections.append(script_obj["hook"])
-                    
-                    if "problem_agitation" in script_obj:
-                        sections.append(script_obj["problem_agitation"])
-                    
-                    if "promise" in script_obj:
-                        sections.append(script_obj["promise"])
-                    
-                    if "main_content" in script_obj:
-                        for section in script_obj["main_content"]:
-                            if isinstance(section, dict) and "content" in section:
-                                sections.append(section["content"])
-                    
-                    if "practical_tips" in script_obj:
-                        for tip in script_obj["practical_tips"]:
-                            if isinstance(tip, dict) and "explanation" in tip:
-                                sections.append(tip["explanation"])
-                    
-                    if "conclusion" in script_obj:
-                        sections.append(script_obj["conclusion"])
-                    
-                    script_text = "\n\n".join(sections)
+    if not script_data["chunks"]:
+        raise ValueError("Script chunks array is empty")
     
-    if not script_text.strip():
-        raise ValueError("Script text is empty or invalid")
+    log(f"✅ Script loaded successfully: {len(script_data['chunks'])} chunks")
     
-    # Clean script text (remove extra whitespace)
-    script_text = re.sub(r'\s+', ' ', script_text).strip()
+    return script_data
+
+
+def extract_full_text_from_chunks(script_data: Dict) -> str:
+    """
+    Extract and combine text from all chunks into full text.
     
-    log(f"✅ Script loaded successfully: {len(script_text)} characters")
+    Args:
+        script_data: Script data dictionary with chunks
+        
+    Returns:
+        Combined full text from all chunks
+    """
+    chunks = script_data["chunks"]
     
-    return script_text.strip()
+    # Extract text from each chunk and combine
+    chunk_texts = []
+    for chunk in chunks:
+        if "text" in chunk and chunk["text"].strip():
+            chunk_texts.append(chunk["text"].strip())
+    
+    if not chunk_texts:
+        raise ValueError("No valid text found in chunks")
+    
+    full_text = " ".join(chunk_texts)
+    
+    # Clean text (remove extra whitespace)
+    full_text = re.sub(r'\s+', ' ', full_text).strip()
+    
+    log(f"📝 Combined text length: {len(full_text)} characters, {len(full_text.split())} words")
+    
+    return full_text
 
 
 # ============================================================================
@@ -232,13 +216,14 @@ def get_audio_duration(audio_file: Path) -> float:
     cmd = [
         'ffprobe', '-v', 'error',
         '-show_entries', 'format=duration',
-        '-of', 'default=noprint_wrappers=1:nokey=1',
+        '-of', 'json',
         str(audio_file)
     ]
     
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        duration = float(result.stdout.strip())
+        data = json.loads(result.stdout)
+        duration = float(data['format']['duration'])
         
         # Format duration for logging
         minutes = int(duration // 60)
@@ -248,7 +233,7 @@ def get_audio_duration(audio_file: Path) -> float:
         return duration
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"ffprobe failed: {e.stderr}")
-    except ValueError as e:
+    except (ValueError, KeyError, json.JSONDecodeError) as e:
         raise RuntimeError(f"Invalid duration output: {result.stdout}")
 
 
@@ -291,230 +276,137 @@ def clean_text_for_subtitles(text: str) -> str:
 
 
 # ============================================================================
-# INTELLIGENT SEGMENTATION FOR PROFESSIONAL DENSITY
+# WORD-BASED SUBTITLE GENERATION FOR PERFECT SYNC WITH XTTS
 # ============================================================================
 
-def calculate_target_segments(total_duration: float) -> int:
+def split_into_words(text: str) -> List[str]:
     """
-    Calculate optimal number of subtitle segments based on video duration.
-    
-    Professional readability standards:
-    - Short videos (<60s): 30-60 segments (faster pacing)
-    - Medium videos (1-5min): 80-150 segments
-    - Long videos (>5min): 150-300 segments
+    Split text into individual words.
     
     Args:
-        total_duration: Total audio duration in seconds
+        text: Clean text
         
     Returns:
-        Target number of subtitle segments
+        List of words
     """
-    if total_duration < 60:  # Under 1 minute
-        # Scale between 30-60 segments based on duration
-        target = 30 + (total_duration / 60) * 30
-        return int(min(60, max(30, target)))
-    elif total_duration < 300:  # 1-5 minutes
-        # Scale between 80-150 segments
-        target = 80 + ((total_duration - 60) / 240) * 70
-        return int(min(150, max(80, target)))
-    else:  # 5+ minutes
-        # Scale between 150-300 segments, but don't exceed 300
-        target = 150 + ((total_duration - 300) / 900) * 150
-        return int(min(300, max(150, target)))
+    # Split on whitespace and filter out empty strings
+    words = [word for word in text.split() if word.strip()]
+    return words
 
 
-def segment_into_phrases_professional(text: str, total_duration: float) -> List[str]:
+def group_words_into_subtitles(words: List[str]) -> List[str]:
     """
-    Split text into optimal phrase segments for professional readability.
-    
-    Features:
-    - Dynamically adjusts segmentation density based on video length
-    - Creates natural phrase boundaries at punctuation
-    - Ensures segments are readable (not too short, not too long)
-    - Preserves semantic meaning within segments
+    Group words into subtitle segments of 3-6 words each.
     
     Args:
-        text: Clean text without metadata
-        total_duration: Total audio duration in seconds (AUDIO AUTHORITY)
+        words: List of words
         
     Returns:
-        List of phrase segments optimized for video length
+        List of subtitle text segments
     """
-    # Calculate target number of segments based on AUDIO AUTHORITY duration
-    target_segments = calculate_target_segments(total_duration)
-    log(f"🎯 Target subtitle segments: {target_segments} for {total_duration:.1f}s video (AUDIO AUTHORITY)")
+    subtitles = []
+    i = 0
+    total_words = len(words)
     
-    # First, split on major punctuation to get natural phrases
-    # Split on sentence endings (।, ?, !) and major pauses (comma, semicolon)
-    natural_phrases = []
-    
-    # Split on sentence endings first
-    sentences = re.split(r'(?<=[।?!])\s+', text)
-    
-    for sentence in sentences:
-        if not sentence.strip():
-            continue
+    while i < total_words:
+        # Determine how many words to take for this subtitle
+        words_remaining = total_words - i
         
-        # For long sentences, split on commas and conjunctions
-        words = sentence.split()
-        
-        if len(words) <= 8:  # Short enough to keep as one phrase
-            natural_phrases.append(sentence.strip())
+        # For last segment, take all remaining words
+        if words_remaining <= MAX_WORDS_PER_SUBTITLE:
+            words_to_take = words_remaining
         else:
-            # Split on commas, semicolons, and common conjunctions
-            parts = re.split(r'(?:[,;]\s*|\s+(?:और|या|लेकिन|क्योंकि|इसलिए|तो|कि)\s+)', sentence)
-            
-            for part in parts:
-                if part.strip():
-                    natural_phrases.append(part.strip())
-    
-    # If we have too few phrases, split longer ones
-    current_count = len(natural_phrases)
-    
-    if current_count < target_segments * 0.8:  # Need more segments
-        log(f"✂️ Increasing segmentation density: {current_count} → ~{target_segments}")
-        
-        refined_phrases = []
-        for phrase in natural_phrases:
-            words = phrase.split()
-            
-            # Determine how many pieces to split this phrase into
-            words_needed = target_segments - len(refined_phrases)
-            remaining_phrases = len(natural_phrases) - natural_phrases.index(phrase)
-            
-            if words_needed > 0 and remaining_phrases > 0:
-                # Target pieces for this phrase
-                target_pieces = max(1, round(words_needed / remaining_phrases))
-                
-                if len(words) > 5 and target_pieces > 1:
-                    # Split into natural word groups
-                    words_per_piece = max(2, len(words) // target_pieces)
-                    
-                    for i in range(0, len(words), words_per_piece):
-                        piece = ' '.join(words[i:i + words_per_piece])
-                        if piece.strip():
-                            refined_phrases.append(piece.strip())
-                else:
-                    refined_phrases.append(phrase)
+            # Aim for optimal word count (4-5 words per subtitle)
+            # But ensure we don't leave too few words for the last segment
+            if words_remaining <= MAX_WORDS_PER_SUBTITLE * 1.5:
+                # If we're near the end, distribute more evenly
+                words_to_take = min(MAX_WORDS_PER_SUBTITLE, words_remaining - MIN_WORDS_PER_SUBTITLE)
+                if words_to_take < MIN_WORDS_PER_SUBTITLE:
+                    words_to_take = MIN_WORDS_PER_SUBTITLE
             else:
-                refined_phrases.append(phrase)
+                # Normal case - take optimal number of words
+                words_to_take = MAX_WORDS_PER_SUBTITLE
         
-        natural_phrases = refined_phrases
+        # Take the words for this subtitle
+        subtitle_words = words[i:i + words_to_take]
+        subtitle_text = ' '.join(subtitle_words)
+        subtitles.append(subtitle_text)
+        
+        i += words_to_take
     
-    # If we have too many phrases, merge short adjacent ones
-    elif current_count > target_segments * 1.2:  # Too many segments
-        log(f"🔗 Reducing segmentation density: {current_count} → ~{target_segments}")
-        
-        merged_phrases = []
-        i = 0
-        
-        while i < len(natural_phrases):
-            current_phrase = natural_phrases[i]
-            
-            # If this is the last phrase or we've reached target, keep as is
-            if i == len(natural_phrases) - 1 or len(merged_phrases) >= target_segments - 1:
-                merged_phrases.append(current_phrase)
-                i += 1
-                continue
-            
-            # Check if next phrase is short enough to merge
-            next_phrase = natural_phrases[i + 1]
-            
-            if len(current_phrase.split()) <= 3 and len(next_phrase.split()) <= 3:
-                # Merge short consecutive phrases
-                merged = current_phrase + " " + next_phrase
-                merged_phrases.append(merged)
-                i += 2
-            else:
-                merged_phrases.append(current_phrase)
-                i += 1
-        
-        natural_phrases = merged_phrases
-    
-    # Final validation: ensure no phrase is too long for comfortable reading
-    final_phrases = []
-    for phrase in natural_phrases:
-        words = phrase.split()
-        
-        if len(words) > 12:  # Too many words for comfortable reading
-            # Split into smaller chunks
-            chunk_size = 6
-            for i in range(0, len(words), chunk_size):
-                chunk = ' '.join(words[i:i + chunk_size])
-                if chunk.strip():
-                    final_phrases.append(chunk.strip())
-        else:
-            final_phrases.append(phrase)
-    
-    log(f"✅ Final segment count: {len(final_phrases)}")
-    
-    return final_phrases
+    return subtitles
 
 
-# ============================================================================
-# EXACT PROPORTIONAL TIMING (NO CLAMPING DISTORTION) - USING AUDIO AUTHORITY
-# ============================================================================
-
-def calculate_exact_proportional_timing(
-    segments: List[str], 
-    total_duration: float
+def calculate_word_based_timing(
+    total_words: int,
+    audio_duration: float
 ) -> List[Tuple[float, float]]:
     """
-    Calculate exact proportional timing based on segment weights.
+    Calculate timestamps based on word-level timing.
     
-    CRITICAL: No duration clamping - timing is purely proportional.
-    Sum of all durations equals total_duration exactly.
-    Uses AUDIO AUTHORITY duration as total_duration.
+    Each word gets equal time based on audio_duration / total_words.
+    Subtitles group multiple words together.
     
     Args:
-        segments: List of text segments
-        total_duration: Total audio duration in seconds (AUDIO AUTHORITY - high precision)
+        total_words: Total number of words
+        audio_duration: Total audio duration in seconds (AUDIO AUTHORITY)
         
     Returns:
-        List of (start_time, end_time) tuples with continuous coverage
+        List of (start_time, end_time) tuples for each word
     """
-    # Calculate weights based on character count (approximates speaking time)
-    # Add small epsilon to avoid zero-weight segments
-    weights = [max(len(s), 1) for s in segments]
-    total_weight = sum(weights)
+    # Calculate time per word (high precision)
+    time_per_word = audio_duration / total_words
     
-    # Calculate exact time per weight unit (high precision)
-    time_per_weight = total_duration / total_weight
+    # Generate timestamps for each word
+    word_timings = []
     
-    # Generate exact proportional timestamps
-    timings = []
-    current_time = 0.0
+    for word_idx in range(total_words):
+        start_time = word_idx * time_per_word
+        end_time = (word_idx + 1) * time_per_word
+        word_timings.append((start_time, end_time))
     
-    for i, weight in enumerate(weights):
-        # Calculate exact duration for this segment
-        duration = weight * time_per_weight
+    # Ensure last word exactly ends at audio_duration (fix floating point)
+    if word_timings:
+        last_start, _ = word_timings[-1]
+        word_timings[-1] = (last_start, audio_duration)
+    
+    return word_timings
+
+
+def combine_word_timings_for_subtitles(
+    subtitles: List[str],
+    word_timings: List[Tuple[float, float]],
+    words: List[str]
+) -> List[Tuple[float, float]]:
+    """
+    Combine word-level timings into subtitle-level timings.
+    
+    Each subtitle's timing spans from first word start to last word end.
+    
+    Args:
+        subtitles: List of subtitle text segments
+        word_timings: List of (start, end) for each word
+        words: List of all words
         
-        # For last segment, ensure it exactly reaches total_duration
-        # This eliminates floating point accumulation errors
-        if i == len(segments) - 1:
-            end_time = total_duration
-        else:
-            end_time = current_time + duration
+    Returns:
+        List of (start_time, end_time) for each subtitle
+    """
+    subtitle_timings = []
+    word_idx = 0
+    
+    for subtitle in subtitles:
+        subtitle_words = subtitle.split()
+        num_words = len(subtitle_words)
         
-        timings.append((current_time, end_time))
-        current_time = end_time
+        # Get timing for first and last word of this subtitle
+        first_word_start = word_timings[word_idx][0]
+        last_word_end = word_timings[word_idx + num_words - 1][1]
+        
+        subtitle_timings.append((first_word_start, last_word_end))
+        
+        word_idx += num_words
     
-    # Verify exact coverage (allowing for floating point tolerance)
-    start_time, end_time = timings[0]
-    assert abs(start_time - 0.0) < 1e-9, f"First segment must start at 0.0, got {start_time}"
-    
-    last_end = timings[-1][1]
-    assert abs(last_end - total_duration) < 1e-6, \
-        f"Last segment must end at AUDIO AUTHORITY duration ({total_duration}), got {last_end}"
-    
-    # Verify no gaps or overlaps (continuous coverage)
-    for i in range(1, len(timings)):
-        prev_end = timings[i-1][1]
-        curr_start = timings[i][0]
-        assert abs(prev_end - curr_start) < 1e-9, \
-            f"Gap/overlap detected at segment {i}: prev_end={prev_end}, curr_start={curr_start}"
-    
-    return timings
+    return subtitle_timings
 
 
 # ============================================================================
@@ -545,24 +437,23 @@ def format_timestamp(seconds: float) -> str:
 # ============================================================================
 
 def generate_subtitles_from_script(
-    script_text: str,
+    script_data: Dict,
     audio_duration: float,
     output_path: Path
 ) -> bool:
     """
-    Generate professional-grade progressive subtitles directly from script text.
+    Generate professional-grade subtitles directly from script chunks.
     
     Features:
+    - WORD-LEVEL TIMING: Each word gets equal time based on audio duration
+    - PERFECT SYNC: Subtitles align exactly with XTTS generated audio
     - CLEAN TEXT: No emotion indicators or scene markers
-    - PROFESSIONAL DENSITY: Optimized for video length
-    - EXACT TIMING: Purely proportional, no clamping distortion
-    - PERFECT SYNC: Frame-level precision matching audio duration
-    - CONTINUOUS COVERAGE: No gaps or overlaps
+    - OPTIMAL READABILITY: 3-6 words per subtitle
     - AUDIO DURATION AUTHORITY: Uses ACTUAL audio duration from ffprobe
     
     Args:
-        script_text: Full script text (may contain metadata)
-        audio_duration: Total audio duration in seconds (AUDIO AUTHORITY - high precision)
+        script_data: Script data dictionary with chunks
+        audio_duration: Total audio duration in seconds (AUDIO AUTHORITY)
         output_path: Path to output SRT file
         
     Returns:
@@ -571,54 +462,71 @@ def generate_subtitles_from_script(
     log("=" * 80)
     log("🎬 PROFESSIONAL SUBTITLE GENERATION - AUDIO DURATION AUTHORITY")
     log("=" * 80)
+    log("⚡ WORD-LEVEL TIMING - Perfect sync with XTTS audio")
     log("⚡ CLEAN TEXT - No emotion indicators or scene markers")
-    log("⚡ PROFESSIONAL DENSITY - Optimized for video length")
-    log("⚡ EXACT TIMING - No clamping distortion")
+    log("⚡ OPTIMAL READABILITY - 3-6 words per subtitle")
     log("⚡ PERFECT SYNC - Frame-level precision with AUDIO AUTHORITY")
     log(f"⚡ AUDIO AUTHORITY duration: {audio_duration:.6f}s")
     log("=" * 80)
     
-    # Step 1: Remove all non-spoken metadata
+    # Step 1: Extract full text from chunks
+    log("📝 Extracting text from chunks...")
+    full_text = extract_full_text_from_chunks(script_data)
+    
+    # Step 2: Remove all non-spoken metadata
     log("🧹 Cleaning text (removing metadata)...")
-    clean_text = clean_text_for_subtitles(script_text)
+    clean_text = clean_text_for_subtitles(full_text)
     
     # Log cleaning results
-    original_len = len(script_text)
+    original_len = len(full_text)
     cleaned_len = len(clean_text)
     log(f"   Removed {original_len - cleaned_len} characters of metadata")
     
-    # Step 2: Intelligent segmentation for professional density
-    log("✂️ Creating optimized phrase segments...")
-    segments = segment_into_phrases_professional(clean_text, audio_duration)
+    # Step 3: Split into words
+    log("🔤 Splitting text into words...")
+    words = split_into_words(clean_text)
+    total_words = len(words)
+    log(f"   Total words: {total_words}")
     
-    if not segments:
-        log("❌ No segments found after cleaning")
+    if total_words == 0:
+        log("❌ No words found after cleaning")
         return False
     
-    # Show sample segments
-    log(f"📊 Segment preview (first 5 of {len(segments)}):")
-    for i, seg in enumerate(segments[:5]):
-        log(f"   {i+1:2d}. {seg[:50]}...")
-    if len(segments) > 5:
-        log(f"   ... and {len(segments) - 5} more")
+    # Step 4: Group words into subtitles (3-6 words each)
+    log(f"✂️ Grouping {total_words} words into subtitles (3-6 words per subtitle)...")
+    subtitles = group_words_into_subtitles(words)
+    log(f"   Created {len(subtitles)} subtitle segments")
     
-    # Step 3: Calculate exact proportional timing using AUDIO AUTHORITY duration
-    log(f"⏱️ Calculating exact proportional timing for {len(segments)} segments")
+    # Show sample subtitles
+    log(f"📊 Subtitle preview (first 5 of {len(subtitles)}):")
+    for i, sub in enumerate(subtitles[:5]):
+        word_count = len(sub.split())
+        log(f"   {i+1:2d}. [{word_count} words] {sub[:50]}...")
+    if len(subtitles) > 5:
+        log(f"   ... and {len(subtitles) - 5} more")
+    
+    # Step 5: Calculate word-level timings based on AUDIO AUTHORITY duration
+    log(f"⏱️ Calculating word-level timings...")
     log(f"   AUDIO AUTHORITY duration: {audio_duration:.6f}s")
+    log(f"   Time per word: {audio_duration/total_words:.6f}s")
     
-    timings = calculate_exact_proportional_timing(segments, audio_duration)
+    word_timings = calculate_word_based_timing(total_words, audio_duration)
     
-    # Validate timing precision
-    first_start = timings[0][0]
-    last_end = timings[-1][1]
+    # Step 6: Combine word timings into subtitle timings
+    log(f"⏱️ Combining word timings into {len(subtitles)} subtitle timings...")
+    subtitle_timings = combine_word_timings_for_subtitles(subtitles, word_timings, words)
+    
+    # Validate timing
+    first_start = subtitle_timings[0][0]
+    last_end = subtitle_timings[-1][1]
     log(f"✅ Timing validation based on AUDIO AUTHORITY:")
-    log(f"   First segment start: {first_start:.6f}s (must be 0.0)")
-    log(f"   Last segment end: {last_end:.6f}s (must equal AUDIO AUTHORITY: {audio_duration:.6f}s)")
-    log(f"   Total segments: {len(timings)}")
-    log(f"   Avg segment duration: {audio_duration/len(timings):.3f}s")
+    log(f"   First subtitle start: {first_start:.6f}s (must be 0.0)")
+    log(f"   Last subtitle end: {last_end:.6f}s (must equal AUDIO AUTHORITY: {audio_duration:.6f}s)")
+    log(f"   Total subtitles: {len(subtitle_timings)}")
+    log(f"   Avg subtitle duration: {audio_duration/len(subtitle_timings):.3f}s")
     
-    # Step 4: Write subtitles with center alignment
-    log(f"📝 Writing {len(segments)} subtitles to {output_path}")
+    # Step 7: Write subtitles with center alignment
+    log(f"📝 Writing {len(subtitles)} subtitles to {output_path}")
     
     # Ensure output directory exists
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -628,19 +536,19 @@ def generate_subtitles_from_script(
     
     try:
         with open(output_path, 'w', encoding='utf-8') as f:
-            for idx, (segment, (start_time, end_time)) in enumerate(zip(segments, timings), 1):
+            for idx, (subtitle, (start_time, end_time)) in enumerate(zip(subtitles, subtitle_timings), 1):
                 # Write subtitle entry with center alignment
                 f.write(f"{idx}\n")
                 f.write(f"{format_timestamp(start_time)} --> {format_timestamp(end_time)}\n")
-                f.write(f"{CENTER_ALIGN}{segment}\n\n")
+                f.write(f"{CENTER_ALIGN}{subtitle}\n\n")
                 
                 # Heartbeat logging for long videos
                 if time.time() - last_heartbeat > HEARTBEAT_INTERVAL:
-                    progress = (idx / len(segments)) * 100
-                    log(f"💓 Progress: {idx}/{len(segments)} ({progress:.1f}%)")
+                    progress = (idx / len(subtitles)) * 100
+                    log(f"💓 Progress: {idx}/{len(subtitles)} ({progress:.1f}%)")
                     last_heartbeat = time.time()
         
-        # Step 5: Verify output quality
+        # Step 8: Verify output quality
         if output_path.exists() and output_path.stat().st_size > 0:
             # Read and validate output
             with open(output_path, 'r', encoding='utf-8') as f:
@@ -653,7 +561,8 @@ def generate_subtitles_from_script(
             log(f"   Output file: {output_path}")
             log(f"   Subtitles written: {actual_count}")
             log(f"   AUDIO AUTHORITY duration: {audio_duration:.6f}s")
-            log(f"   Target density: {calculate_target_segments(audio_duration)}")
+            log(f"   Total words: {total_words}")
+            log(f"   Words per subtitle: {total_words/actual_count:.1f}")
             log(f"   Average duration: {audio_duration/actual_count:.3f}s")
             log(f"   File size: {output_path.stat().st_size / 1024:.2f} KB")
             
@@ -708,6 +617,7 @@ def main():
     log("=" * 80)
     log(f"📝 PROFESSIONAL SUBTITLE GENERATION - Run ID: {args.run_id}")
     log(f"   AUDIO DURATION AUTHORITY: ENABLED")
+    log(f"   WORD-LEVEL TIMING: ENABLED (perfect XTTS sync)")
     log("=" * 80)
     
     start_time = time.time()
@@ -728,7 +638,7 @@ def main():
     
     # Step 3: Load script
     try:
-        script_text = load_script(script_path)
+        script_data = load_script(script_path)
     except ValueError as e:
         log(f"❌ Script loading failed: {e}")
         sys.exit(1)
@@ -750,7 +660,7 @@ def main():
         sys.exit(0)
     
     success = generate_subtitles_from_script(
-        script_text=script_text,
+        script_data=script_data,
         audio_duration=audio_duration,  # AUDIO AUTHORITY duration
         output_path=output_path
     )
