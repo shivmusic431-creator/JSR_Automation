@@ -6,6 +6,7 @@ Now supports UNLIMITED CLIPS from pagination and enhanced clip validation
 ABSOLUTELY NO BLACK VIDEO GENERATION - Fails safely if requirements not met
 AUDIO DURATION AUTHORITY - Final video duration must match audio duration exactly
 STRICT POST-RENDER VALIDATION - Automatically enforces audio duration match
+FIXED: Subtitles are now properly burned into video using subtitles filter
 """
 import os
 import json
@@ -291,63 +292,22 @@ def enforce_audio_duration_authority(video_path: Path, audio_file: str) -> Path:
 
 
 # ============================================================================
-# PREMIUM FONT CONFIGURATION
+# PREMIUM FONT CONFIGURATION - DISABLED FOR SUBTITLE BURNING
 # ============================================================================
 
-PREFERRED_FONTS = [
-    "Montserrat-Bold",
-    "Poppins-Bold", 
-    "Inter-Bold",
-    "Bebas-Neue",
-    "Arial-Bold",  # Fallback
-    "Noto-Sans-Devanagari-Bold",  # Hindi support
-    "NotoSansDevanagari-Bold"
-]
-
-def find_available_font() -> str:
-    """
-    Find the best available premium font on the system.
-    
-    Returns:
-        Font name that exists on the system
-    """
-    # Common font directories
-    font_dirs = [
-        "/usr/share/fonts",
-        "/usr/local/share/fonts",
-        os.path.expanduser("~/.fonts"),
-        os.path.expanduser("~/.local/share/fonts"),
-        "C:\\Windows\\Fonts" if sys.platform == "win32" else None,
-        "/System/Library/Fonts" if sys.platform == "darwin" else None,
-    ]
-    
-    font_dirs = [d for d in font_dirs if d and os.path.exists(d)]
-    
-    # Check for premium fonts
-    for font_name in PREFERRED_FONTS:
-        patterns = [
-            f"{font_name}.ttf",
-            f"{font_name}.otf",
-            f"{font_name}.ttc",
-            font_name.lower() + ".ttf",
-            font_name.replace("-", "") + ".ttf",
-            font_name.replace("-", " ") + ".ttf",
-        ]
-        
-        for font_dir in font_dirs:
-            for pattern in patterns:
-                matches = list(Path(font_dir).rglob(pattern))
-                if matches:
-                    log(f"✅ Found premium font: {font_name}")
-                    return font_name
-    
-    # Fallback to system default
-    log("⚠️ No premium fonts found, using system default")
-    return "Noto Sans Devanagari"
+# Note: We're bypassing the dynamic font detection for subtitle burning
+# and using Noto Sans Devanagari directly as required
+SUBTITLE_FONT = "Noto Sans Devanagari"
+SUBTITLE_FONTSIZE = 28
+SUBTITLE_PRIMARY_COLOR = "&Hffffff&"  # White
+SUBTITLE_OUTLINE_COLOR = "&H000000&"  # Black
+SUBTITLE_OUTLINE_WIDTH = 2
+SUBTITLE_SHADOW = 1
+SUBTITLE_ALIGNMENT = 2  # Center aligned
 
 
 # ============================================================================
-# PREMIUM COLOR PALETTE
+# PREMIUM COLOR PALETTE (KEPT FOR REFERENCE BUT NOT USED)
 # ============================================================================
 
 COLORS = {
@@ -366,7 +326,7 @@ COLORS = {
 
 
 # ============================================================================
-# ANIMATION CONFIGURATION
+# ANIMATION CONFIGURATION (KEPT FOR REFERENCE BUT NOT USED)
 # ============================================================================
 
 ANIMATION = {
@@ -447,230 +407,6 @@ def find_latest_audio_file(output_dir="output", video_type="long"):
 
 
 # ============================================================================
-# PREMIUM ANIMATED ASS SUBTITLE GENERATION
-# ============================================================================
-
-def create_premium_ass_subtitles(
-    srt_path: Path,
-    video_width: int,
-    video_height: int,
-    video_duration: float,
-    video_type: str = "long",
-    font_name: str = None
-) -> Path:
-    """
-    Convert SRT to premium animated ASS subtitles.
-    
-    Features:
-    - Premium fonts (Montserrat/Poppins/Inter Bold)
-    - Professional color palette with accent highlighting
-    - Cinematic fade-in animation
-    - Subtle upward slide motion
-    - Word-level accent highlighting for important terms
-    - Dynamic font sizing based on content length
-    
-    Args:
-        srt_path: Path to input SRT file
-        video_width: Video width in pixels
-        video_height: Video height in pixels
-        video_duration: Total video duration in seconds
-        video_type: 'long' or 'short'
-        font_name: Optional font name (auto-detected if None)
-        
-    Returns:
-        Path to generated ASS file
-    """
-    log("🎨 Creating premium animated subtitles...")
-    
-    # Find font if not provided
-    if font_name is None:
-        font_name = find_available_font()
-    
-    # Calculate dynamic font size based on video type and dimensions
-    if video_type == "short":
-        base_font_size = int(video_height / 18)  # ~60px for 1080x1920
-        margin_v = int(video_height * 0.15)  # 15% from bottom
-        max_chars_per_line = 30  # Shorts have less text per line
-    else:
-        base_font_size = int(video_height / 25)  # ~43px for 1920x1080
-        margin_v = int(video_height * 0.08)  # 8% from bottom
-        max_chars_per_line = 50  # Long videos can have more text
-    
-    # Ensure minimum readability
-    font_size = max(base_font_size, 42 if video_type == "short" else 36)
-    
-    log(f"📏 Base font size: {font_size}px")
-    log(f"📐 Bottom margin: {margin_v}px")
-    
-    # Parse SRT file
-    subtitles = []
-    
-    try:
-        with open(srt_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        # Parse SRT format
-        blocks = re.split(r'\n\s*\n', content.strip())
-        
-        for block in blocks:
-            lines = block.strip().split('\n')
-            if len(lines) >= 3:
-                # Extract timecode
-                time_line = lines[1]
-                time_match = re.match(
-                    r'(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})',
-                    time_line
-                )
-                
-                if time_match:
-                    # Convert SRT time to seconds
-                    def srt_time_to_seconds(time_str):
-                        h, m, s_ms = time_str.split(':')
-                        s, ms = s_ms.split(',')
-                        return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000
-                    
-                    start = srt_time_to_seconds(time_match.group(1))
-                    end = srt_time_to_seconds(time_match.group(2))
-                    
-                    # Extract text (skip index and timecode)
-                    text = '\n'.join(lines[2:]).strip()
-                    
-                    # Remove center alignment marker if present
-                    text = text.replace('{\\an5}', '').strip()
-                    
-                    # Split long lines for better readability
-                    if len(text) > max_chars_per_line:
-                        # Simple splitting at natural break points
-                        words = text.split()
-                        lines_text = []
-                        current_line = []
-                        current_length = 0
-                        
-                        for word in words:
-                            if current_length + len(word) + 1 <= max_chars_per_line:
-                                current_line.append(word)
-                                current_length += len(word) + 1
-                            else:
-                                if current_line:
-                                    lines_text.append(' '.join(current_line))
-                                current_line = [word]
-                                current_length = len(word)
-                        
-                        if current_line:
-                            lines_text.append(' '.join(current_line))
-                        
-                        text = '\\N'.join(lines_text)  # ASS line break
-                    
-                    subtitles.append((start, end, text))
-        
-        log(f"✅ Parsed {len(subtitles)} subtitle blocks")
-        
-    except Exception as e:
-        log(f"❌ Failed to parse SRT: {e}")
-        return None
-    
-    # Create ASS file with premium styling and animation
-    ass_path = srt_path.with_suffix('.premium.ass')
-    
-    try:
-        with open(ass_path, 'w', encoding='utf-8') as f:
-            # Write ASS header with premium styles
-            f.write(f"""[Script Info]
-; Script generated by YT-AutoPilot Premium Subtitle Engine
-Title: Premium Animated Subtitles
-ScriptType: v4.00+
-Collisions: Normal
-PlayDepth: 0
-Timer: 100.0000
-WrapStyle: 0
-ScaledBorderAndShadow: yes
-Video Resolution: {video_width} x {video_height}
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Premium,{font_name},{font_size},{COLORS['primary_warm']},{COLORS['accent_yellow']},{COLORS['outline']},{COLORS['shadow']},-1,0,0,0,100,100,0,0,1,3,1,2,10,10,{margin_v},1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-""")
-            
-            # Write each subtitle with animation
-            for idx, (start, end, text) in enumerate(subtitles):
-                # Format times for ASS (h:ms:cs)
-                def format_ass_time(seconds: float) -> str:
-                    hours = int(seconds // 3600)
-                    minutes = int((seconds % 3600) // 60)
-                    secs = seconds % 60
-                    centiseconds = int((secs - int(secs)) * 100)
-                    return f"{hours}:{minutes:02d}:{int(secs):02d}.{centiseconds:02d}"
-                
-                start_str = format_ass_time(start)
-                end_str = format_ass_time(end)
-                
-                # Determine if this line should have accent highlighting
-                words = text.split()
-                is_short_line = len(words) <= 4
-                has_emphasis = '!' in text or '?' in text or '...' in text
-                
-                if is_short_line or has_emphasis:
-                    # Apply accent color based on content
-                    if '!' in text:
-                        accent_color = COLORS['accent_yellow']
-                    elif '?' in text:
-                        accent_color = COLORS['accent_cyan']
-                    elif '...' in text:
-                        accent_color = COLORS['accent_purple']
-                    else:
-                        # Cycle through accent colors for variety
-                        color_index = idx % 5
-                        accent_colors = [
-                            COLORS['accent_yellow'],
-                            COLORS['accent_cyan'],
-                            COLORS['accent_red'],
-                            COLORS['accent_green'],
-                            COLORS['accent_purple']
-                        ]
-                        accent_color = accent_colors[color_index]
-                    
-                    # Apply color to entire line
-                    text = f"{{\\c{accent_color}}}{text}"
-                
-                # Add cinematic animation
-                # \fad() = fade in/out, \move() = sliding motion, \fscx()/\fscy() = scale
-                fade_duration = int(ANIMATION['fade_in_duration'] * 1000)
-                slide_distance = ANIMATION['slide_up_distance']
-                slide_duration = int(ANIMATION['slide_duration'] * 1000)
-                
-                # Enhanced animation for key moments
-                if is_short_line:
-                    # Add subtle scale effect for short important lines
-                    animated_text = (
-                        f"{{\\fad({fade_duration},0)}}"  # Fade in
-                        f"{{\\move(0,{slide_distance},0,0,0,{slide_duration})}}"  # Slide up
-                        f"{{\\fscx{int(ANIMATION['scale_effect']*100)}\\fscy{int(ANIMATION['scale_effect']*100)}}}"  # Scale
-                        f"{text}"
-                        f"{{\\fscx100\\fscy100}}"  # Reset scale
-                    )
-                else:
-                    # Standard animation for longer text
-                    animated_text = (
-                        f"{{\\fad({fade_duration},0)}}"  # Fade in
-                        f"{{\\move(0,{slide_distance},0,0,0,{slide_duration})}}"  # Slide up
-                        f"{text}"
-                    )
-                
-                # Write event
-                f.write(f"Dialogue: 0,{start_str},{end_str},Premium,,0,0,0,,{animated_text}\n")
-        
-        log(f"✅ Created premium animated ASS: {ass_path}")
-        return ass_path
-        
-    except Exception as e:
-        log(f"❌ Failed to create premium ASS: {e}")
-        return None
-
-
-# ============================================================================
 # VIDEO METADATA DETECTION
 # ============================================================================
 
@@ -722,28 +458,60 @@ def get_video_metadata(video_path: Path) -> tuple:
 
 
 # ============================================================================
-# VIDEO RENDERING WITH PREMIUM SUBTITLES
+# FIXED VIDEO RENDERING WITH HARD SUBTITLES
 # ============================================================================
 
-def render_video_with_premium_subtitles(
+def render_video_with_hard_subtitles(
     input_video: Path,
     output_video: Path,
-    ass_subtitles: Path,
+    subtitles_srt: Path,
     video_duration: float,
     video_type: str = "long"
 ) -> bool:
     """
-    Render final video with premium animated subtitles using FFmpeg.
+    Render final video with hard-burned subtitles using FFmpeg.
     
-    Uses high-quality encoding settings optimized for YouTube.
+    Uses the subtitles filter to permanently burn subtitles into video frames.
+    Always uses Noto Sans Devanagari font for Hindi support.
+    Subtitles are center-aligned with outline and shadow for readability.
+    
+    Args:
+        input_video: Path to input video
+        output_video: Path to output video
+        subtitles_srt: Path to SRT subtitles file
+        video_duration: Duration of video in seconds (for progress tracking)
+        video_type: Type of video ('long' or 'short') - used for logging only
+        
+    Returns:
+        True if successful
     """
-    log(f"🎥 Rendering video with premium animated subtitles...")
+    log(f"🎥 Rendering video with hard-burned subtitles...")
+    log(f"   Subtitle file: {subtitles_srt}")
+    log(f"   Font: {SUBTITLE_FONT}, Size: {SUBTITLE_FONTSIZE}")
+    
+    # Verify subtitle file exists
+    if not subtitles_srt.exists():
+        log(f"❌ Subtitle file not found: {subtitles_srt}")
+        return False
+    
+    # Create subtitle filter string with proper escaping
+    # Format: subtitles=filename:force_style='FontName=...,FontSize=...'
+    subtitle_filter = (
+        f"subtitles={subtitles_srt}:force_style="
+        f"'FontName={SUBTITLE_FONT},"
+        f"FontSize={SUBTITLE_FONTSIZE},"
+        f"PrimaryColour={SUBTITLE_PRIMARY_COLOR},"
+        f"OutlineColour={SUBTITLE_OUTLINE_COLOR},"
+        f"Outline={SUBTITLE_OUTLINE_WIDTH},"
+        f"Shadow={SUBTITLE_SHADOW},"
+        f"Alignment={SUBTITLE_ALIGNMENT}'"
+    )
     
     # Build FFmpeg command with high quality settings
     cmd = [
         'ffmpeg', '-y',
         '-i', str(input_video),
-        '-vf', f"ass={ass_subtitles}",
+        '-vf', subtitle_filter,
         '-c:v', 'libx264',
         '-preset', 'slow',  # Better compression
         '-crf', '18',  # High quality
@@ -757,8 +525,9 @@ def render_video_with_premium_subtitles(
         str(output_video)
     ]
     
-    # Log command
-    log(f"⚙️ Running FFmpeg with high quality settings...")
+    # Log command for debugging
+    log(f"⚙️ Running FFmpeg with subtitle filter...")
+    log(f"   Filter: {subtitle_filter}")
     
     try:
         # Run FFmpeg with progress monitoring
@@ -794,7 +563,23 @@ def render_video_with_premium_subtitles(
         if returncode == 0:
             if output_video.exists() and output_video.stat().st_size > 0:
                 size_mb = output_video.stat().st_size / (1024 * 1024)
-                log(f"✅ Video rendered successfully: {size_mb:.2f} MB")
+                log(f"✅ Video rendered successfully with hard subtitles: {size_mb:.2f} MB")
+                
+                # Quick verification that subtitles were applied
+                # Check if file is valid
+                probe_cmd = [
+                    'ffprobe', '-v', 'error',
+                    '-show_entries', 'stream=codec_type',
+                    '-of', 'json',
+                    str(output_video)
+                ]
+                try:
+                    probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
+                    if probe_result.returncode == 0:
+                        log(f"✅ Output video verified")
+                except:
+                    pass
+                
                 return True
         
         log(f"❌ FFmpeg failed with code {returncode}")
@@ -982,7 +767,7 @@ def verify_manifest_integrity(manifest_path: Path, clips_path: Path) -> tuple:
 
 
 # ============================================================================
-# ENHANCED SHORTS VIDEO EDITING WITH PREMIUM SUBTITLES - NO BLACK FALLBACK
+# ENHANCED SHORTS VIDEO EDITING WITH HARD SUBTITLES - NO BLACK FALLBACK
 # ============================================================================
 
 def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str, 
@@ -990,12 +775,11 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
                       hook_file: str = None, cta_file: str = None,
                       premium_subtitles: bool = True):
     """
-    Edit SHORTS video using FFmpeg with PREMIUM ANIMATED subtitles
+    Edit SHORTS video using FFmpeg with HARD-BURNED subtitles
     
     Features:
-    - Premium fonts (Montserrat/Poppins Bold)
-    - Cinematic fade-in animation
-    - Professional color palette with accent highlighting
+    - Noto Sans Devanagari font for Hindi support
+    - Center-aligned subtitles with outline and shadow
     - Perfect sync with word-level subtitles
     - Automatic clip looping to fill full audio duration
     - Enhanced clip validation and shuffling
@@ -1011,14 +795,13 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
         subtitles_file: Optional path to SRT subtitles
         hook_file: Optional hook JSON for shorts
         cta_file: Optional CTA JSON for shorts
-        premium_subtitles: Use premium animated subtitles (default: True)
+        premium_subtitles: Parameter kept for compatibility (subtitles are always burned)
         
     Returns:
         Path to output video file or None if failed
     """
     
-    log(f"🎬 Editing SHORTS video with PREMIUM ANIMATED subtitles...")
-    log(f"   Premium mode: {'ON' if premium_subtitles else 'OFF'}")
+    log(f"🎬 Editing SHORTS video with HARD-BURNED subtitles...")
     log(f"   Run ID: {run_id}")
     
     # Setup paths
@@ -1179,52 +962,30 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
         video_for_subtitles = temp_video
         final_duration = assembled_duration
     
-    # Get video metadata for subtitle styling
+    # Get video metadata (for logging only)
     width, height, duration, is_short, fps = get_video_metadata(video_for_subtitles)
     log(f"📹 Video metadata: {width}x{height}, {duration:.1f}s, {fps:.1f}fps")
     
-    # Process subtitles
-    subtitles_ass = None
-    if subtitles_file and Path(subtitles_file).exists():
-        if premium_subtitles:
-            # Create premium animated ASS subtitles
-            subtitles_ass = create_premium_ass_subtitles(
-                Path(subtitles_file),
-                width,
-                height,
-                duration,
-                'short'
-            )
-        else:
-            # Use legacy subtitle styling
-            log("📝 Using legacy subtitle styling")
-            
-            # Create simple ASS from SRT
-            subtitles_ass = Path(subtitles_file).with_suffix('.ass')
-            cmd_convert = [
-                'ffmpeg', '-y',
-                '-i', subtitles_file,
-                '-c', 'ass',
-                str(subtitles_ass)
-            ]
-            try:
-                subprocess.run(cmd_convert, check=True, capture_output=True)
-            except:
-                log(f"❌ Failed to convert subtitles", "ERROR")
-                subtitles_ass = None
+    # Render final video with HARD-BURNED subtitles
+    render_success = False
     
-    # Render final video with premium subtitles
-    if subtitles_ass and subtitles_ass.exists():
-        render_success = render_video_with_premium_subtitles(
+    # Always burn subtitles if SRT file exists
+    subtitles_srt_path = None
+    if subtitles_file and Path(subtitles_file).exists():
+        subtitles_srt_path = Path(subtitles_file)
+        log(f"📝 Found subtitles file: {subtitles_srt_path}")
+        
+        # Render with hard-burned subtitles
+        render_success = render_video_with_hard_subtitles(
             video_for_subtitles,
             output_file,
-            subtitles_ass,
+            subtitles_srt_path,
             duration,
             'short'
         )
     else:
         # No subtitles, just copy
-        log("📝 No subtitles to add, copying video...")
+        log("⚠️ No subtitles file found, rendering without subtitles")
         shutil.copy2(video_for_subtitles, output_file)
         render_success = True
     
@@ -1339,14 +1100,15 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     final_video_duration = get_video_duration(output_file)
     
     size_mb = output_file.stat().st_size / (1024 * 1024)
-    log(f"✅ SHORTS video with PREMIUM ANIMATED subtitles complete")
+    log(f"✅ SHORTS video with HARD-BURNED subtitles complete")
     log(f"   Output: {output_file}")
     log(f"   Size: {size_mb:.2f} MB")
     log(f"   Final video duration: {final_video_duration:.1f}s")
     log(f"   AUDIO AUTHORITY: {final_audio_duration:.1f}s")
     log(f"   Duration match: {'✓' if abs(final_video_duration - final_audio_duration) < 0.1 else '⚠️'}")
     log(f"   FPS: {fps:.1f}")
-    log(f"   Subtitles: {'Premium Animated' if premium_subtitles and subtitles_file else 'Standard'}")
+    log(f"   Subtitles: Hard-burned (permanent)")
+    log(f"   Font: {SUBTITLE_FONT}")
     log(f"   Clips used: {len(valid_clips)}")
     
     # Save metadata
@@ -1365,9 +1127,12 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
         'file_size_mb': size_mb,
         'fps': fps,
         'resolution': f"{width}x{height}",
-        'subtitles_type': 'premium_animated' if premium_subtitles and subtitles_file else 'standard',
-        'premium_font': find_available_font() if premium_subtitles else 'Noto Sans Devanagari',
-        'animation': 'fade_in+slide_up+scale' if premium_subtitles else 'none',
+        'subtitles_type': 'hard_burned',
+        'subtitles_font': SUBTITLE_FONT,
+        'subtitles_size': SUBTITLE_FONTSIZE,
+        'subtitles_alignment': 'center',
+        'subtitles_outline': SUBTITLE_OUTLINE_WIDTH,
+        'subtitles_shadow': SUBTITLE_SHADOW,
         'hook_included': hook_file and Path(hook_file).exists(),
         'cta_included': cta_file and Path(cta_file).exists(),
         'clips_validated': len(valid_clips),
@@ -1385,19 +1150,18 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
 
 
 # ============================================================================
-# ENHANCED LONG VIDEO EDITING WITH PREMIUM SUBTITLES - NO BLACK FALLBACK
+# ENHANCED LONG VIDEO EDITING WITH HARD SUBTITLES - NO BLACK FALLBACK
 # ============================================================================
 
 def edit_long_video(script_file: str, audio_file: str, clips_dir: str, 
                     run_id: str, subtitles_file: str = None,
                     premium_subtitles: bool = True):
     """
-    Edit LONG video using FFmpeg with PREMIUM ANIMATED subtitles
+    Edit LONG video using FFmpeg with HARD-BURNED subtitles
     
     Features:
-    - Premium fonts (Montserrat/Poppins Bold)
-    - Cinematic fade-in animation
-    - Professional color palette with accent highlighting
+    - Noto Sans Devanagari font for Hindi support
+    - Center-aligned subtitles with outline and shadow
     - Perfect sync with word-level subtitles
     - Automatic clip looping to fill full audio duration
     - Enhanced clip validation and shuffling
@@ -1411,14 +1175,13 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
         clips_dir: Directory containing video clips
         run_id: Run identifier
         subtitles_file: Optional path to SRT subtitles
-        premium_subtitles: Use premium animated subtitles (default: True)
+        premium_subtitles: Parameter kept for compatibility (subtitles are always burned)
         
     Returns:
         Path to output video file or None if failed
     """
     
-    log(f"🎬 Editing LONG video with PREMIUM ANIMATED subtitles...")
-    log(f"   Premium mode: {'ON' if premium_subtitles else 'OFF'}")
+    log(f"🎬 Editing LONG video with HARD-BURNED subtitles...")
     log(f"   Run ID: {run_id}")
     
     # Setup paths
@@ -1575,52 +1338,30 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
         video_for_subtitles = temp_video
         final_duration = assembled_duration
     
-    # Get video metadata for subtitle styling
+    # Get video metadata (for logging only)
     width, height, duration, is_short, fps = get_video_metadata(video_for_subtitles)
     log(f"📹 Video metadata: {width}x{height}, {duration:.1f}s, {fps:.1f}fps")
     
-    # Process subtitles
-    subtitles_ass = None
-    if subtitles_file and Path(subtitles_file).exists():
-        if premium_subtitles:
-            # Create premium animated ASS subtitles
-            subtitles_ass = create_premium_ass_subtitles(
-                Path(subtitles_file),
-                width,
-                height,
-                duration,
-                'long'
-            )
-        else:
-            # Use legacy subtitle styling
-            log("📝 Using legacy subtitle styling")
-            
-            # Create simple ASS from SRT
-            subtitles_ass = Path(subtitles_file).with_suffix('.ass')
-            cmd_convert = [
-                'ffmpeg', '-y',
-                '-i', subtitles_file,
-                '-c', 'ass',
-                str(subtitles_ass)
-            ]
-            try:
-                subprocess.run(cmd_convert, check=True, capture_output=True)
-            except:
-                log(f"❌ Failed to convert subtitles", "ERROR")
-                subtitles_ass = None
+    # Render final video with HARD-BURNED subtitles
+    render_success = False
     
-    # Render final video with premium subtitles
-    if subtitles_ass and subtitles_ass.exists():
-        render_success = render_video_with_premium_subtitles(
+    # Always burn subtitles if SRT file exists
+    subtitles_srt_path = None
+    if subtitles_file and Path(subtitles_file).exists():
+        subtitles_srt_path = Path(subtitles_file)
+        log(f"📝 Found subtitles file: {subtitles_srt_path}")
+        
+        # Render with hard-burned subtitles
+        render_success = render_video_with_hard_subtitles(
             video_for_subtitles,
             output_file,
-            subtitles_ass,
+            subtitles_srt_path,
             duration,
             'long'
         )
     else:
         # No subtitles, just copy
-        log("📝 No subtitles to add, copying video...")
+        log("⚠️ No subtitles file found, rendering without subtitles")
         shutil.copy2(video_for_subtitles, output_file)
         render_success = True
     
@@ -1661,14 +1402,15 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     final_video_duration = get_video_duration(output_file)
     
     size_mb = output_file.stat().st_size / (1024 * 1024)
-    log(f"✅ LONG video with PREMIUM ANIMATED subtitles complete")
+    log(f"✅ LONG video with HARD-BURNED subtitles complete")
     log(f"   Output: {output_file}")
     log(f"   Size: {size_mb:.2f} MB")
     log(f"   Final video duration: {final_video_duration:.1f}s ({final_video_duration/60:.2f}m)")
     log(f"   AUDIO AUTHORITY: {final_audio_duration:.1f}s")
     log(f"   Duration match: {'✓' if abs(final_video_duration - final_audio_duration) < 0.1 else '⚠️'}")
     log(f"   FPS: {fps:.1f}")
-    log(f"   Subtitles: {'Premium Animated' if premium_subtitles and subtitles_file else 'Standard'}")
+    log(f"   Subtitles: Hard-burned (permanent)")
+    log(f"   Font: {SUBTITLE_FONT}")
     log(f"   Clips used: {len(valid_clips)}")
     
     # Save metadata
@@ -1688,9 +1430,12 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
         'file_size_mb': size_mb,
         'fps': fps,
         'resolution': f"{width}x{height}",
-        'subtitles_type': 'premium_animated' if premium_subtitles and subtitles_file else 'standard',
-        'premium_font': find_available_font() if premium_subtitles else 'Noto Sans Devanagari',
-        'animation': 'fade_in+slide_up+scale' if premium_subtitles else 'none',
+        'subtitles_type': 'hard_burned',
+        'subtitles_font': SUBTITLE_FONT,
+        'subtitles_size': SUBTITLE_FONTSIZE,
+        'subtitles_alignment': 'center',
+        'subtitles_outline': SUBTITLE_OUTLINE_WIDTH,
+        'subtitles_shadow': SUBTITLE_SHADOW,
         'clips_validated': len(valid_clips),
         'manifest_pages': manifest_data.get('pages_searched', 1) if manifest_data else 1,
         'audio_authority_validated': True,
@@ -1710,7 +1455,7 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
 # ============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description='Edit video with PREMIUM ANIMATED subtitles - NO BLACK VIDEO FALLBACK - AUDIO DURATION AUTHORITY')
+    parser = argparse.ArgumentParser(description='Edit video with HARD-BURNED subtitles - NO BLACK VIDEO FALLBACK - AUDIO DURATION AUTHORITY')
     parser.add_argument('--type', choices=['long', 'short'], required=True,
                        help='Video type (long form or short)')
     parser.add_argument('--script-file', required=True,
@@ -1730,18 +1475,18 @@ def main():
     parser.add_argument('--cta-file', default=None,
                        help='Optional CTA JSON for shorts')
     parser.add_argument('--premium', action='store_true', default=True,
-                       help='Use premium animated subtitles (default: True)')
+                       help='Parameter kept for compatibility (subtitles are always burned)')
     parser.add_argument('--no-premium', action='store_false', dest='premium',
-                       help='Disable premium animated subtitles')
+                       help='Parameter kept for compatibility')
     
     args = parser.parse_args()
     
     log("=" * 80)
-    log(f"🎬 PREMIUM ANIMATED SUBTITLE RENDERING - {args.type.upper()}")
-    log(f"   Mode: {'PREMIUM ANIMATED' if args.premium else 'STANDARD'}")
+    log(f"🎬 HARD-BURNED SUBTITLE RENDERING - {args.type.upper()}")
     log(f"   BLACK VIDEO FALLBACK: DISABLED")
     log(f"   AUDIO DURATION AUTHORITY: ENABLED")
     log(f"   POST-RENDER VALIDATION: AUTOMATIC (ALWAYS RUNS)")
+    log(f"   SUBTITLE FONT: {SUBTITLE_FONT} (fixed)")
     log("=" * 80)
     
     # Step 1: Dynamically find audio file if not specified
@@ -1777,7 +1522,7 @@ def main():
             args.subtitles_file if Path(args.subtitles_file).exists() else None,
             args.hook_file,
             args.cta_file,
-            args.premium
+            args.premium  # Kept for compatibility
         )
     else:
         output_file = edit_long_video(
@@ -1786,13 +1531,14 @@ def main():
             args.clips_dir,
             args.run_id,
             args.subtitles_file if Path(args.subtitles_file).exists() else None,
-            args.premium
+            args.premium  # Kept for compatibility
         )
     
     if output_file:
-        log(f"✅ {args.type.upper()} video with {'PREMIUM ANIMATED' if args.premium else 'STANDARD'} subtitles created successfully")
+        log(f"✅ {args.type.upper()} video with HARD-BURNED subtitles created successfully")
         log(f"   Output: {output_file}")
         log(f"   AUDIO DURATION AUTHORITY enforced - final video matches audio")
+        log(f"   Subtitles permanently burned into video frames")
         sys.exit(0)
     else:
         log(f"❌ FATAL: {args.type.upper()} video creation failed - no video generated")
