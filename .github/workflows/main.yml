@@ -120,7 +120,7 @@ jobs:
   generate-script-short:
     runs-on: ubuntu-latest
     needs: generate-script-long
-    timeout-minutes: 10  # Shorts generate fast
+    timeout-minutes: 10
     outputs:
       script_data: ${{ steps.script.outputs.script_data }}
     steps:
@@ -252,7 +252,7 @@ jobs:
   generate-audio-short:
     runs-on: ubuntu-latest
     needs: generate-script-short
-    timeout-minutes: 30  # Shorts generate fast
+    timeout-minutes: 30
     outputs:
       audio_duration: ${{ steps.audio.outputs.duration }}
     steps:
@@ -324,7 +324,7 @@ jobs:
             --run-id "$RUN_ID" \
             --status "${{ job.status }}"
 
-  # Phase 3: Subtitle Generation (SCRIPT-BASED - NO VOSK)
+  # Phase 3: Subtitle Generation (USES AUDIO DURATION AUTHORITY)
   generate-subtitles:
     runs-on: ubuntu-latest
     needs: [generate-audio-long, generate-audio-short]
@@ -362,47 +362,39 @@ jobs:
           name: script-${{ matrix.audio-type }}-${{ env.RUN_ID }}
           path: output/
 
-      - name: Generate ${{ matrix.audio-type }} Subtitles (SCRIPT-BASED - NO VOSK)
+      - name: Generate ${{ matrix.audio-type }} Subtitles (USING AUDIO DURATION AUTHORITY)
         env:
           RUN_ID: ${{ env.RUN_ID }}
         run: |
           if [ "${{ matrix.audio-type }}" == "long" ]; then
             SCRIPT_FILE="output/script_long.json"
-            OUTPUT_FILE="output/subtitles_long.srt"
           else
             SCRIPT_FILE="output/script_short.json"
-            OUTPUT_FILE="output/subtitles_short.srt"
           fi
           
-          echo "⚡ Generating ${{ matrix.audio-type }} subtitles using SCRIPT-BASED method (NO SPEECH RECOGNITION)"
+          echo "⚡ Generating ${{ matrix.audio-type }} subtitles using AUDIO DURATION AUTHORITY"
           python src/video_generation/generate_subtitles.py \
             --run-id "$RUN_ID" \
             --audio-dir output \
             --script-file "$SCRIPT_FILE" \
-            --output-file "$OUTPUT_FILE"
+            --output-file output/subtitles.srt
 
       - name: Validate ${{ matrix.audio-type }} Subtitles
         run: |
-          if [ "${{ matrix.audio-type }}" == "long" ]; then
-            SUBTITLE_FILE="output/subtitles_long.srt"
-          else
-            SUBTITLE_FILE="output/subtitles_short.srt"
+          if [ ! -f "output/subtitles.srt" ]; then
+            echo "❌ Subtitles file not found"
+            exit 1
           fi
           
-          if [ -f "$SUBTITLE_FILE" ]; then
-            LINE_COUNT=$(wc -l < "$SUBTITLE_FILE")
-            SUB_COUNT=$((LINE_COUNT / 4))
-            echo "✅ ${{ matrix.audio-type }} subtitles generated: $SUB_COUNT subtitles"
-            
-            # Check for center alignment marker
-            if grep -q "{\\\\an5}" "$SUBTITLE_FILE"; then
-              echo "✅ Center alignment marker {\\an5} found"
-            else
-              echo "❌ Center alignment marker missing - this is required"
-              exit 1
-            fi
+          LINE_COUNT=$(wc -l < output/subtitles.srt)
+          SUB_COUNT=$((LINE_COUNT / 4))
+          echo "✅ ${{ matrix.audio-type }} subtitles generated: $SUB_COUNT subtitles"
+          
+          # Check for center alignment marker
+          if grep -q "{\\\\an5}" output/subtitles.srt; then
+            echo "✅ Center alignment marker {\\an5} found"
           else
-            echo "❌ Subtitle file not found"
+            echo "❌ Center alignment marker missing - this is required"
             exit 1
           fi
 
@@ -410,10 +402,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: subtitles-${{ matrix.audio-type }}-${{ env.RUN_ID }}
-          path: output/subtitles_${{ matrix.audio-type }}.srt
+          path: output/subtitles.srt
           retention-days: 1
 
-  # Phase 4: Asset Acquisition for Long Video - PRODUCTION MODE (NO DURATION ARG)
+  # Phase 4: Asset Acquisition for Long Video - PRODUCTION MODE
   acquire-assets-long:
     runs-on: ubuntu-latest
     needs: [generate-audio-long, generate-subtitles]
@@ -454,7 +446,6 @@ jobs:
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
         run: |
-          # PRODUCTION MODE: No duration argument passed - auto-detection inside script
           python src/video_generation/acquire_assets.py \
             --script-file output/script_long.json \
             --run-id "$RUN_ID" \
@@ -479,7 +470,7 @@ jobs:
             --status "${{ job.status }}" \
             --video-type "long"
 
-  # Phase 4.5: Asset Acquisition for Short Video - PRODUCTION MODE (NO DURATION ARG)
+  # Phase 4.5: Asset Acquisition for Short Video - PRODUCTION MODE
   acquire-assets-short:
     runs-on: ubuntu-latest
     needs: [generate-audio-short, generate-subtitles]
@@ -520,7 +511,6 @@ jobs:
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
         run: |
-          # PRODUCTION MODE: No duration argument passed - auto-detection inside script
           python src/video_generation/acquire_assets.py \
             --script-file output/script_short.json \
             --run-id "$RUN_ID" \
@@ -616,40 +606,73 @@ jobs:
           fc-cache -fv
           echo "✅ Noto Sans Devanagari fonts installed for Hindi subtitle support"
 
-      - name: Download Long Video Artifacts
+      - name: Download Long Script Artifact
         uses: actions/download-artifact@v4
         with:
+          name: script-long-${{ env.RUN_ID }}
           path: output/
-          pattern: '*-long-${{ env.RUN_ID }}'
+
+      - name: Download Long Audio Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: audio-long-${{ env.RUN_ID }}
+          path: output/
+
+      - name: Download Long Assets Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: assets-long-${{ env.RUN_ID }}
+          path: output/clips/
+
+      - name: Download Long Subtitles Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: subtitles-long-${{ env.RUN_ID }}
+          path: output/
+
+      - name: Pipeline Integrity Guard - Long Video
+        run: |
+          echo "🔍 Validating all required files for long video pipeline..."
+          MISSING=0
+          
+          if [ ! -f "output/script_long.json" ]; then
+            echo "❌ Missing: output/script_long.json"
+            MISSING=$((MISSING+1))
+          else
+            echo "✅ Found: output/script_long.json"
+          fi
+          
+          if [ ! -f "output/audio_long.wav" ]; then
+            echo "❌ Missing: output/audio_long.wav"
+            MISSING=$((MISSING+1))
+          else
+            echo "✅ Found: output/audio_long.wav"
+          fi
+          
+          if [ ! -f "output/subtitles.srt" ]; then
+            echo "❌ Missing: output/subtitles.srt"
+            MISSING=$((MISSING+1))
+          else
+            echo "✅ Found: output/subtitles.srt"
+          fi
+          
+          if [ ! -d "output/clips" ] || [ -z "$(ls -A output/clips)" ]; then
+            echo "❌ Missing: output/clips/ (empty or not found)"
+            MISSING=$((MISSING+1))
+          else
+            echo "✅ Found: output/clips/ with $(ls -1 output/clips | wc -l) files"
+          fi
+          
+          if [ $MISSING -gt 0 ]; then
+            echo "❌ Pipeline integrity check failed: $MISSING required files missing"
+            exit 1
+          fi
+          
+          echo "✅ All required files present - proceeding with long video editing"
 
       - name: Organize Long Video Files
         run: |
           mkdir -p output/final
-          
-          # Copy long script
-          if [ -d "output/script-long-${{ env.RUN_ID }}" ]; then
-            cp output/script-long-${{ env.RUN_ID }}/script_long.json output/ 2>/dev/null || true
-          fi
-          
-          # Copy long audio
-          if [ -d "output/audio-long-${{ env.RUN_ID }}" ]; then
-            cp output/audio-long-${{ env.RUN_ID }}/audio_long.wav output/ 2>/dev/null || true
-          fi
-          
-          # Copy long assets
-          if [ -d "output/assets-long-${{ env.RUN_ID }}" ]; then
-            mkdir -p output/clips/
-            cp output/assets-long-${{ env.RUN_ID }}/* output/clips/ 2>/dev/null || true
-            cp output/assets-long-${{ env.RUN_ID }}/manifest.json output/clips/ 2>/dev/null || true
-            echo "✅ Long assets and manifest copied"
-          fi
-          
-          # Copy long subtitles
-          if [ -d "output/subtitles-long-${{ env.RUN_ID }}" ]; then
-            cp output/subtitles-long-${{ env.RUN_ID }}/subtitles_long.srt output/subtitles.srt 2>/dev/null || true
-            echo "✅ Long subtitles found"
-          fi
-          
           echo "📁 Long video files organized:"
           ls -la output/
 
@@ -666,14 +689,14 @@ jobs:
       - name: Quality Check Long Video
         run: |
           python src/video_generation/quality_check.py \
-            --video output/final/long_video.mp4 \
+            --video output/final_video_long.mp4 \
             --type long
 
       - name: Upload Long Video
         uses: actions/upload-artifact@v4
         with:
           name: video-long-${{ env.RUN_ID }}
-          path: output/final/long_video.mp4
+          path: output/final_video_long.mp4
           retention-days: 1
 
       - name: Notify Tier 1
@@ -688,7 +711,7 @@ jobs:
             --status "${{ job.status }}" \
             --video-type "long"
 
-  # Phase 6.5: Video Editing (Short) with Viral Hooks and Subtitles (COMPLETELY SEPARATE)
+  # Phase 6.5: Video Editing (Short) with Viral Hooks and Subtitles
   edit-video-short:
     runs-on: ubuntu-latest
     needs: [generate-audio-short, acquire-assets-short, generate-subtitles]
@@ -718,40 +741,73 @@ jobs:
           fc-cache -fv
           echo "✅ Noto Sans Devanagari fonts installed for Hindi subtitle support"
 
-      - name: Download Short Video Artifacts
+      - name: Download Short Script Artifact
         uses: actions/download-artifact@v4
         with:
+          name: script-short-${{ env.RUN_ID }}
           path: output/
-          pattern: '*-short-${{ env.RUN_ID }}'
+
+      - name: Download Short Audio Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: audio-short-${{ env.RUN_ID }}
+          path: output/
+
+      - name: Download Short Assets Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: assets-short-${{ env.RUN_ID }}
+          path: output/clips/
+
+      - name: Download Short Subtitles Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: subtitles-short-${{ env.RUN_ID }}
+          path: output/
+
+      - name: Pipeline Integrity Guard - Short Video
+        run: |
+          echo "🔍 Validating all required files for short video pipeline..."
+          MISSING=0
+          
+          if [ ! -f "output/script_short.json" ]; then
+            echo "❌ Missing: output/script_short.json"
+            MISSING=$((MISSING+1))
+          else
+            echo "✅ Found: output/script_short.json"
+          fi
+          
+          if [ ! -f "output/audio_short.wav" ]; then
+            echo "❌ Missing: output/audio_short.wav"
+            MISSING=$((MISSING+1))
+          else
+            echo "✅ Found: output/audio_short.wav"
+          fi
+          
+          if [ ! -f "output/subtitles.srt" ]; then
+            echo "❌ Missing: output/subtitles.srt"
+            MISSING=$((MISSING+1))
+          else
+            echo "✅ Found: output/subtitles.srt"
+          fi
+          
+          if [ ! -d "output/clips" ] || [ -z "$(ls -A output/clips)" ]; then
+            echo "❌ Missing: output/clips/ (empty or not found)"
+            MISSING=$((MISSING+1))
+          else
+            echo "✅ Found: output/clips/ with $(ls -1 output/clips | wc -l) files"
+          fi
+          
+          if [ $MISSING -gt 0 ]; then
+            echo "❌ Pipeline integrity check failed: $MISSING required files missing"
+            exit 1
+          fi
+          
+          echo "✅ All required files present - proceeding with short video editing"
 
       - name: Organize Short Video Files
         run: |
           mkdir -p output/final
-          
-          # Copy short script
-          if [ -d "output/script-short-${{ env.RUN_ID }}" ]; then
-            cp output/script-short-${{ env.RUN_ID }}/script_short.json output/ 2>/dev/null || true
-          fi
-          
-          # Copy short audio
-          if [ -d "output/audio-short-${{ env.RUN_ID }}" ]; then
-            cp output/audio-short-${{ env.RUN_ID }}/audio_short.wav output/ 2>/dev/null || true
-          fi
-          
-          # Copy short assets
-          if [ -d "output/assets-short-${{ env.RUN_ID }}" ]; then
-            mkdir -p output/clips/
-            cp output/assets-short-${{ env.RUN_ID }}/* output/clips/ 2>/dev/null || true
-            cp output/assets-short-${{ env.RUN_ID }}/manifest.json output/clips/ 2>/dev/null || true
-            echo "✅ Short assets and manifest copied"
-          fi
-          
-          # Copy short subtitles
-          if [ -d "output/subtitles-short-${{ env.RUN_ID }}" ]; then
-            cp output/subtitles-short-${{ env.RUN_ID }}/subtitles_short.srt output/subtitles.srt 2>/dev/null || true
-            echo "✅ Short subtitles found"
-          fi
-          
           echo "📁 Short video files organized:"
           ls -la output/
 
@@ -786,14 +842,14 @@ jobs:
       - name: Quality Check Short Video
         run: |
           python src/video_generation/quality_check.py \
-            --video output/final/short_video.mp4 \
+            --video output/final_video_short.mp4 \
             --type short
 
       - name: Upload Short Video
         uses: actions/upload-artifact@v4
         with:
           name: video-short-${{ env.RUN_ID }}
-          path: output/final/short_video.mp4
+          path: output/final_video_short.mp4
           retention-days: 1
 
       - name: Notify Tier 1
@@ -842,12 +898,12 @@ jobs:
           
           # Copy long video
           if [ -d "output/video-long-${{ env.RUN_ID }}" ]; then
-            cp output/video-long-${{ env.RUN_ID }}/long_video.mp4 output/upload/ 2>/dev/null || echo "⚠️ Long video not found"
+            cp output/video-long-${{ env.RUN_ID }}/final_video_long.mp4 output/upload/long_video.mp4 2>/dev/null || echo "⚠️ Long video not found"
           fi
           
           # Copy short video
           if [ -d "output/video-short-${{ env.RUN_ID }}" ]; then
-            cp output/video-short-${{ env.RUN_ID }}/short_video.mp4 output/upload/ 2>/dev/null || echo "⚠️ Short video not found"
+            cp output/video-short-${{ env.RUN_ID }}/final_video_short.mp4 output/upload/short_video.mp4 2>/dev/null || echo "⚠️ Short video not found"
           fi
           
           # Copy thumbnail
@@ -858,15 +914,6 @@ jobs:
           # Copy long script (contains titles, descriptions)
           if [ -d "output/script-long-${{ env.RUN_ID }}" ]; then
             cp output/script-long-${{ env.RUN_ID }}/script_long.json output/upload/script.json 2>/dev/null || echo "⚠️ Script not found"
-          fi
-          
-          # Copy subtitles for both videos
-          if [ -d "output/subtitles-long-${{ env.RUN_ID }}" ]; then
-            cp output/subtitles-long-${{ env.RUN_ID }}/subtitles_long.srt output/upload/subtitles_long.srt 2>/dev/null || true
-          fi
-          
-          if [ -d "output/subtitles-short-${{ env.RUN_ID }}" ]; then
-            cp output/subtitles-short-${{ env.RUN_ID }}/subtitles_short.srt output/upload/subtitles_short.srt 2>/dev/null || true
           fi
           
           echo "📁 Files ready for YouTube upload:"
