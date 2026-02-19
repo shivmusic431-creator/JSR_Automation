@@ -16,6 +16,8 @@ FIXES:
 - NEW: Complete sentences preserved across chunks
 - NEW: Zero word loss, zero overlap
 - NEW: PRODUCTION SAFETY - Chunk integrity validation stops pipeline on corruption
+- FIXED: Added response_mime_type="application/json" to force structured JSON output
+- FIXED: Enhanced response handling to capture JSON from candidates when text field is empty
 """
 import os
 import json
@@ -1167,6 +1169,8 @@ def generate_script(category, sub_category, episode, run_id, video_type='long'):
     Generate script using Gemini 2.5 API with enhanced error handling
     Now with deterministic chunk generation for long videos
     And production safety validation
+    FIXED: Added response_mime_type="application/json" to force structured JSON output
+    FIXED: Enhanced response handling to capture JSON from candidates when text field is empty
     
     Args:
         category: Main category
@@ -1215,7 +1219,8 @@ def generate_script(category, sub_category, episode, run_id, video_type='long'):
                     temperature=0.7,
                     max_output_tokens=8192,  # Maximum allowed
                     top_p=0.9,
-                    top_k=40
+                    top_k=40,
+                    response_mime_type="application/json"  # CRITICAL: Force structured JSON output
                 )
             )
             
@@ -1227,13 +1232,26 @@ def generate_script(category, sub_category, episode, run_id, video_type='long'):
             print(f"⚠️ Model {model_name} failed: {e}")
             continue
     
-    if not response or not hasattr(response, 'text'):
+    if not response:
         print("❌ All models failed")
         raise Exception("All Gemini models failed")
     
     # Parse JSON response with enhanced extraction
     try:
-        response_text = response.text.strip()
+        # FIXED: Enhanced response handling to capture JSON from candidates when text field is empty
+        if hasattr(response, "text") and response.text:
+            response_text = response.text.strip()
+            print("📄 Response captured from response.text")
+        elif hasattr(response, "candidates") and response.candidates:
+            # Extract from candidates[0].content.parts[0].text
+            candidate = response.candidates[0]
+            if hasattr(candidate, "content") and hasattr(candidate.content, "parts") and candidate.content.parts:
+                response_text = candidate.content.parts[0].text.strip()
+                print("📄 Response captured from response.candidates[0].content.parts[0].text")
+            else:
+                raise RuntimeError("Gemini returned candidates but no text content")
+        else:
+            raise RuntimeError("Gemini returned empty response")
         
         print(f"📏 Response length: {len(response_text)} chars")
         
