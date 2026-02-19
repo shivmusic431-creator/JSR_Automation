@@ -2,6 +2,7 @@
 """
 YT-AutoPilot Pro - Script Generation with Gemini 2.5 API
 Generates complete YouTube video scripts in Pure Hindi with 10+ minute enforcement
+NOW WITH DETERMINISTIC CHUNK GENERATION - Gemini outputs pre-chunked scripts
 
 FIXES:
 - Enhanced JSON extraction with multi-pass validation
@@ -11,6 +12,10 @@ FIXES:
 - Optimized for Coqui XTTS Hindi voice generation
 - Emotion indicators strictly on separate lines for XTTS metadata
 - SUPPORTS SEPARATE SHORTS SCRIPT GENERATION (not trimmed from long videos)
+- NEW: Gemini outputs scripts in pre-defined chunks (400-800 words each)
+- NEW: Complete sentences preserved across chunks
+- NEW: Zero word loss, zero overlap
+- NEW: PRODUCTION SAFETY - Chunk integrity validation stops pipeline on corruption
 """
 import os
 import json
@@ -155,7 +160,16 @@ def get_episode_title(category, sub_category, episode):
     return f"{sub_category} - Episode {episode}"
 
 def create_long_script_prompt(category, sub_category, episode, title):
-    """Create the master prompt for Gemini with 10+ minute enforcement and XTTS optimization"""
+    """
+    Create the master prompt for Gemini with 10+ minute enforcement,
+    XTTS optimization, and CRITICAL: DETERMINISTIC CHUNK GENERATION
+    
+    Gemini must output the script in pre-defined chunks:
+    - Each chunk: 400-800 words
+    - Complete sentences ONLY (never split mid-sentence)
+    - No overlap, no gaps, no missing words
+    - Chunks concatenate perfectly to form full script
+    """
     
     hindi_category = CATEGORIES_CONFIG.get(category, {}).get("hindi_name", category)
     hindi_sub = CATEGORIES_CONFIG.get(category, {}).get("sub_categories", {}).get(sub_category, sub_category)
@@ -323,11 +337,30 @@ The script must sound:
 - Emotionally engaging (भावनाओं को छू ले)
 - Natural spoken Hindi (रोबोटिक नहीं, बल्कि जैसे कोई दोस्त बात कर रहा हो)
 
+**CRITICAL: DETERMINISTIC CHUNK GENERATION REQUIREMENT (ABSOLUTE)**
+
+You MUST split the entire script into logical chunks following these RULES:
+
+1. **CHUNK SIZE RULE:** Each chunk MUST contain 400-800 Hindi words
+2. **SENTENCE COMPLETENESS RULE:** Each chunk MUST end with a COMPLETE sentence (। ? !)
+3. **NO SPLIT RULE:** NEVER split a sentence between chunks
+4. **CONTINUITY RULE:** Chunks must flow naturally with no gaps or overlaps
+5. **WORD COUNT RULE:** Total words across ALL chunks = full script word count
+
+For a 10-15 minute script (1400-1900 words), you will typically create:
+- 3-4 chunks (for ~1400 words) or
+- 4-5 chunks (for ~1900 words)
+
+**IMPORTANT CHUNKING GUIDELINES:**
+- Chunk 1: Should contain HOOK + PROBLEM AGITATION + PROMISE (400-800 words)
+- Middle chunks: MAIN CONTENT sections divided naturally (400-800 words each)
+- Final chunk: PRACTICAL TIPS + CONCLUSION (400-800 words)
+
 **CRITICAL OUTPUT INSTRUCTION:**
 You MUST return ONLY a valid JSON object. Do NOT include any explanation, preamble, or text before or after the JSON.
 Do NOT wrap it in markdown code blocks (```json). Return the raw JSON object directly.
 
-The JSON MUST have this exact structure:
+The JSON MUST have this EXACT structure:
 {{
   "metadata": {{
     "title_options": ["Option 1", "Option 2", "Option 3"],
@@ -339,40 +372,49 @@ The JSON MUST have this exact structure:
     "sub_category": "{sub_category}",
     "episode": {episode}
   }},
+  "chunks": [
+    {{
+      "chunk_id": 1,
+      "text": "Complete Hindi narration text for chunk 1 with emotional indicators like (गंभीर स्वर में) and scene markers [SCENE: type]. Must end with a complete sentence (। ? !). Word count: between 400-800 words."
+    }},
+    {{
+      "chunk_id": 2,
+      "text": "Complete Hindi narration text for chunk 2 with emotional indicators and scene markers. Must start with the natural continuation from chunk 1. Must end with a complete sentence (। ? !). Word count: between 400-800 words."
+    }},
+    {{
+      "chunk_id": 3,
+      "text": "Complete Hindi narration text for chunk 3 with emotional indicators and scene markers. Must start with the natural continuation from chunk 2. Must end with a complete sentence (। ? !). Word count: between 400-800 words."
+    }}
+    // Add more chunks as needed (typically 3-5 total)
+  ],
+  "full_script": "The COMPLETE concatenation of ALL chunks in order. This must be exactly chunk1.text + chunk2.text + chunk3.text + ... with no modifications.",
   "script": {{
-    "hook": "Text with emotional indicators like (उत्साह से) and [SCENE: type]",
-    "problem_agitation": "Text with emotional indicators and scene markers",
-    "promise": "Text with emotional indicators",
-    "main_content": [
-      {{
-        "section_title": "Title in Hindi",
-        "content": "Detailed content with emotional indicators and [SCENE: type]"
-      }}
-    ],
-    "practical_tips": [
-      {{
-        "tip_number": 1,
-        "tip_title": "Title in Hindi",
-        "explanation": "Detailed explanation with emotional indicators"
-      }}
-    ],
-    "conclusion": "Conclusion text with emotional indicators",
     "word_count": 1600,
     "estimated_duration": "12:30"
   }}
 }}
 
+**CRITICAL VALIDATION RULES:**
+- Verify that `full_script` is exactly the concatenation of all chunk texts
+- Verify that each chunk contains complete sentences only
+- Verify that no sentence is split across chunks
+- Verify that total words in chunks = word_count in script
+- Verify that chunks cover 100% of the script content with no gaps
+
 **ENSURE THE JSON IS COMPLETE AND VALID. DO NOT TRUNCATE ANY SECTION.**
 **REMEMBER: Pure Hindi (देवनागरी लिपि), NOT Hinglish**
-**REMEMBER: Use emotional indicators (गंभीर स्वर में) NOT [PAUSE] markers**
-**REMEMBER: Emotional indicators must be placed on a separate line BEFORE the sentence**
-**REMEMBER: Scene markers must be on separate lines, NOT spoken**"""
+**REMEMBER: Emotional indicators must be on separate lines BEFORE sentences**
+**REMEMBER: Scene markers must be on separate lines, NOT spoken**
+**REMEMBER: CHUNKS MUST BE 400-800 WORDS EACH, COMPLETE SENTENCES ONLY**"""
     
     return prompt
 
 
 def create_short_script_prompt(category, sub_category, episode, title):
-    """Create prompt for viral YouTube Shorts script (45-60 seconds)"""
+    """
+    Create prompt for viral YouTube Shorts script (45-60 seconds)
+    Shorts are single chunk by definition (no splitting needed)
+    """
     
     hindi_category = CATEGORIES_CONFIG.get(category, {}).get("hindi_name", category)
     hindi_sub = CATEGORIES_CONFIG.get(category, {}).get("sub_categories", {}).get(sub_category, sub_category)
@@ -463,7 +505,7 @@ Emotion indicators must ALWAYS be placed on a separate line before narration.
 You MUST return ONLY a valid JSON object. Do NOT include any explanation, preamble, or text before or after the JSON.
 Do NOT wrap it in markdown code blocks (```json). Return the raw JSON object directly.
 
-The JSON MUST have this exact structure:
+The JSON MUST have this EXACT structure:
 {{
   "metadata": {{
     "category": "{category}",
@@ -846,7 +888,7 @@ def salvage_truncated_json(text: str) -> str:
     # Try to parse
     try:
         parsed = json.loads(repaired)
-        if 'metadata' in parsed and 'script' in parsed:
+        if 'metadata' in parsed and 'chunks' in parsed:
             print(f"✓ Salvaged JSON with intelligent closing ({open_braces} braces, {open_brackets} brackets)")
             return repaired
     except json.JSONDecodeError as e:
@@ -906,50 +948,9 @@ def salvage_truncated_json(text: str) -> str:
         
         try:
             parsed = json.loads(repaired)
-            if 'metadata' in parsed and 'script' in parsed:
+            if 'metadata' in parsed and 'chunks' in parsed:
                 print(f"✓ Salvaged by backtracking {step_back} chars")
                 return repaired
-        except json.JSONDecodeError:
-            continue
-    
-    # Strategy 3: Find last complete section and close from there
-    print("🔄 Trying last complete section detection...")
-    
-    # Look for last complete practical_tips or main_content section
-    section_markers = [
-        ('"practical_tips":', 'practical tips'),
-        ('"main_content":', 'main content'),
-        ('"promise":', 'promise'),
-        ('"problem_agitation":', 'problem agitation')
-    ]
-    
-    for marker, name in section_markers:
-        last_occurrence = json_text.rfind(marker)
-        if last_occurrence == -1:
-            continue
-        
-        # Try to close from just before this section
-        # This creates a valid but incomplete script
-        candidate = json_text[:last_occurrence]
-        
-        # Remove trailing comma
-        candidate = re.sub(r',\s*$', '', candidate.rstrip())
-        
-        # Close the script object and root object
-        repaired = candidate + '}}'
-        
-        try:
-            parsed = json.loads(repaired)
-            if 'metadata' in parsed:
-                print(f"✓ Salvaged by truncating before {name} section")
-                # Add minimal script object if missing
-                if 'script' not in parsed:
-                    parsed['script'] = {
-                        'hook': 'Content truncated',
-                        'word_count': 0,
-                        'estimated_duration': '0:00'
-                    }
-                return json.dumps(parsed)
         except json.JSONDecodeError:
             continue
     
@@ -957,9 +958,197 @@ def salvage_truncated_json(text: str) -> str:
     return None
 
 
+# ============================================================================
+# PRODUCTION SAFETY - CHUNK INTEGRITY VALIDATION
+# ============================================================================
+
+def validate_chunks_integrity(script_data: dict) -> bool:
+    """
+    CRITICAL PRODUCTION SAFETY VALIDATION
+    
+    Validates script chunk integrity to ensure pipeline doesn't proceed with corrupted data.
+    
+    Validation Rules:
+    1. script_data contains "chunks" key
+    2. chunks is a non-empty list
+    3. Each chunk contains:
+       - "chunk_id" (integer)
+       - "text" (non-empty string)
+    4. Each chunk's text ends with a sentence terminator (। ? !)
+    5. Chunk IDs are sequential starting from 1 (1,2,3,... no gaps)
+    6. full_script equals concatenation of all chunk texts in order
+    
+    Args:
+        script_data: Parsed script JSON data
+        
+    Returns:
+        True if validation passes
+        
+    Raises:
+        RuntimeError: With detailed error message if any validation fails
+    """
+    print("🔒 PRODUCTION SAFETY: Validating script chunk integrity...")
+    
+    # Rule 1: Contains "chunks" key
+    if "chunks" not in script_data:
+        error_msg = "Script integrity validation failed: Missing 'chunks' key in script_data"
+        print(f"❌ {error_msg}")
+        raise RuntimeError(error_msg)
+    
+    # Rule 2: chunks is a non-empty list
+    chunks = script_data["chunks"]
+    if not isinstance(chunks, list):
+        error_msg = f"Script integrity validation failed: 'chunks' is not a list (found {type(chunks).__name__})"
+        print(f"❌ {error_msg}")
+        raise RuntimeError(error_msg)
+    
+    if len(chunks) == 0:
+        error_msg = "Script integrity validation failed: 'chunks' list is empty"
+        print(f"❌ {error_msg}")
+        raise RuntimeError(error_msg)
+    
+    print(f"   ✓ Found {len(chunks)} chunks")
+    
+    # Track expected chunk ID
+    expected_id = 1
+    concatenated_text = ""
+    
+    # Rule 3, 4, 5: Validate each chunk
+    for idx, chunk in enumerate(chunks):
+        chunk_num = idx + 1
+        
+        # Rule 3a: Each chunk must contain "chunk_id"
+        if "chunk_id" not in chunk:
+            error_msg = f"Script integrity validation failed: Chunk {chunk_num} missing 'chunk_id' field"
+            print(f"❌ {error_msg}")
+            raise RuntimeError(error_msg)
+        
+        chunk_id = chunk["chunk_id"]
+        
+        # Rule 5: Chunk IDs must be sequential
+        if chunk_id != expected_id:
+            error_msg = (f"Script integrity validation failed: Chunk ID sequence broken. "
+                        f"Expected ID {expected_id}, got {chunk_id} at position {chunk_num}")
+            print(f"❌ {error_msg}")
+            raise RuntimeError(error_msg)
+        
+        # Rule 3b: Each chunk must contain "text"
+        if "text" not in chunk:
+            error_msg = f"Script integrity validation failed: Chunk {chunk_id} missing 'text' field"
+            print(f"❌ {error_msg}")
+            raise RuntimeError(error_msg)
+        
+        text = chunk["text"]
+        
+        # Rule 3c: text must be non-empty string
+        if not isinstance(text, str):
+            error_msg = (f"Script integrity validation failed: Chunk {chunk_id} 'text' is not a string "
+                        f"(found {type(text).__name__})")
+            print(f"❌ {error_msg}")
+            raise RuntimeError(error_msg)
+        
+        if not text.strip():
+            error_msg = f"Script integrity validation failed: Chunk {chunk_id} text is empty"
+            print(f"❌ {error_msg}")
+            raise RuntimeError(error_msg)
+        
+        # Rule 4: Each chunk's text must end with a sentence terminator
+        # Check last non-whitespace character for Hindi sentence terminators
+        stripped_text = text.rstrip()
+        if stripped_text and stripped_text[-1] not in ['।', '?', '!']:
+            error_msg = (f"Script integrity validation failed: Chunk {chunk_id} does not end with "
+                        f"sentence terminator (। ? !). Last char: '{stripped_text[-1]}'")
+            print(f"❌ {error_msg}")
+            print(f"   Chunk text ends with: ...{stripped_text[-50:]}")
+            raise RuntimeError(error_msg)
+        
+        # Add to concatenated text for Rule 6
+        concatenated_text += text
+        
+        # Increment expected ID
+        expected_id += 1
+        
+        print(f"   ✓ Chunk {chunk_id}: {len(text.split())} words, ends with '{stripped_text[-1]}'")
+    
+    # Rule 6: full_script must equal concatenation of chunks
+    if "full_script" not in script_data:
+        error_msg = "Script integrity validation failed: Missing 'full_script' key"
+        print(f"❌ {error_msg}")
+        raise RuntimeError(error_msg)
+    
+    full_script = script_data["full_script"]
+    
+    if not isinstance(full_script, str):
+        error_msg = f"Script integrity validation failed: 'full_script' is not a string (found {type(full_script).__name__})"
+        print(f"❌ {error_msg}")
+        raise RuntimeError(error_msg)
+    
+    # Normalize for comparison (remove extra whitespace)
+    concatenated_normalized = re.sub(r'\s+', ' ', concatenated_text.strip())
+    full_normalized = re.sub(r'\s+', ' ', full_script.strip())
+    
+    if concatenated_normalized != full_normalized:
+        # Try to find where they differ
+        concat_words = concatenated_normalized.split()
+        full_words = full_normalized.split()
+        
+        if len(concat_words) != len(full_words):
+            error_msg = (f"Script integrity validation failed: Word count mismatch. "
+                        f"Concatenated chunks: {len(concat_words)} words, "
+                        f"full_script: {len(full_words)} words")
+        else:
+            # Find first difference
+            for i, (cw, fw) in enumerate(zip(concat_words, full_words)):
+                if cw != fw:
+                    error_msg = (f"Script integrity validation failed: Content mismatch at word {i}. "
+                                f"Chunks: '{cw}', full_script: '{fw}'")
+                    break
+            else:
+                error_msg = "Script integrity validation failed: full_script differs from concatenated chunks (whitespace differences only)"
+        
+        print(f"❌ {error_msg}")
+        raise RuntimeError(error_msg)
+    
+    print(f"✅ PRODUCTION SAFETY: All chunk integrity checks passed")
+    print(f"   ✓ {len(chunks)} sequential chunks validated")
+    print(f"   ✓ All chunks end with sentence terminators")
+    print(f"   ✓ full_script matches concatenated chunks")
+    print(f"   ✓ Total words: {len(full_normalized.split())}")
+    
+    return True
+
+
+def validate_chunks(chunks, full_script):
+    """
+    Legacy validation function - kept for backward compatibility
+    Now uses the production safety validator internally
+    
+    Args:
+        chunks: List of chunk dictionaries with 'text' field
+        full_script: Expected full script text
+    
+    Returns:
+        Boolean indicating if validation passed
+    """
+    # Create a minimal script_data structure for validation
+    script_data = {
+        "chunks": chunks,
+        "full_script": full_script
+    }
+    
+    try:
+        validate_chunks_integrity(script_data)
+        return True
+    except RuntimeError as e:
+        print(f"⚠️ Chunk validation failed: {e}")
+        return False
+
+
 def generate_script(category, sub_category, episode, run_id, video_type='long'):
     """
     Generate script using Gemini 2.5 API with enhanced error handling
+    Now with deterministic chunk generation for long videos
+    And production safety validation
     
     Args:
         category: Main category
@@ -967,6 +1156,12 @@ def generate_script(category, sub_category, episode, run_id, video_type='long'):
         episode: Episode number
         run_id: Run ID
         video_type: 'long' or 'short'
+    
+    Returns:
+        Script data dictionary
+    
+    Raises:
+        Exception: If generation or validation fails
     """
     
     print(f"📝 Generating {video_type.upper()} script for: {category} - {sub_category} (Ep {episode})")
@@ -1067,13 +1262,45 @@ def generate_script(category, sub_category, episode, run_id, video_type='long'):
                     'episode': episode
                 }
             
+            if 'chunks' not in script_data:
+                raise ValueError("JSON missing required field: 'chunks' for long script")
+            
+            if 'full_script' not in script_data:
+                # Try to construct full_script from chunks if missing
+                if 'chunks' in script_data:
+                    full_script = ""
+                    for chunk in sorted(script_data['chunks'], key=lambda x: x.get('chunk_id', 0)):
+                        if 'text' in chunk:
+                            full_script += chunk['text']
+                    script_data['full_script'] = full_script
+                    print("⚠️ Missing 'full_script', constructed from chunks")
+                else:
+                    raise ValueError("JSON missing required field: 'full_script'")
+            
+            # ===== PRODUCTION SAFETY VALIDATION =====
+            # Validate chunk integrity - this will raise RuntimeError if validation fails
+            validate_chunks_integrity(script_data)
+            
+            # For backward compatibility, also populate script.full_text
             if 'script' not in script_data:
-                raise ValueError("JSON missing required field: script")
+                script_data['script'] = {}
+            
+            script_data['script']['full_text'] = script_data.get('full_script', '')
+            
+            # Count chunks and words
+            num_chunks = len(script_data.get('chunks', []))
+            chunk_word_counts = []
+            for chunk in script_data.get('chunks', []):
+                if 'text' in chunk:
+                    words = len(chunk['text'].split())
+                    chunk_word_counts.append(words)
             
             # Validate word count
             word_count = script_data.get('script', {}).get('word_count', 0)
             if word_count < 1400:
                 print(f"⚠️ Long script word count {word_count} is below minimum 1400")
+            
+            print(f"📊 Generated {num_chunks} chunks with word counts: {chunk_word_counts}")
         
         # Add generation metadata
         script_data['generation_info'] = {
@@ -1086,6 +1313,11 @@ def generate_script(category, sub_category, episode, run_id, video_type='long'):
             'model_used': model_used,
             'response_length_chars': len(response_text)
         }
+        
+        # Add chunking info for long videos
+        if video_type == 'long' and 'chunks' in script_data:
+            script_data['generation_info']['chunking_method'] = 'gemini_deterministic_chunking'
+            script_data['generation_info']['num_chunks'] = len(script_data['chunks'])
         
         # Save to file based on video type
         output_dir = Path('output')
@@ -1105,8 +1337,9 @@ def generate_script(category, sub_category, episode, run_id, video_type='long'):
             print(f"📝 Word count: {script_data['script'].get('word_count', 'N/A')}")
             print(f"⏱️ Estimated duration: {script_data['script'].get('estimated_duration', 'N/A')}")
         else:
-            print(f"📝 Word count: {script_data['script'].get('word_count', 'N/A')}")
-            print(f"⏱️ Estimated duration: {script_data['script'].get('estimated_duration', 'N/A')}")
+            print(f"📝 Word count: {script_data.get('script', {}).get('word_count', 'N/A')}")
+            print(f"📊 Chunks: {len(script_data.get('chunks', []))}")
+            print(f"⏱️ Estimated duration: {script_data.get('script', {}).get('estimated_duration', 'N/A')}")
             print(f"🎯 Title: {script_data['metadata'].get('final_title', 'N/A')}")
         
         print(f"💾 Saved to: {output_file}")
@@ -1121,6 +1354,10 @@ def generate_script(category, sub_category, episode, run_id, video_type='long'):
         end = min(len(response_text), e.pos + 200)
         print(response_text[start:end])
         raise
+    except RuntimeError as e:
+        # This is from validation failure - re-raise to stop pipeline
+        print(f"❌ PRODUCTION SAFETY STOP: {e}")
+        raise
     except Exception as e:
         print(f"❌ Error: {e}")
         import traceback
@@ -1128,7 +1365,7 @@ def generate_script(category, sub_category, episode, run_id, video_type='long'):
         raise
 
 def main():
-    parser = argparse.ArgumentParser(description='Generate YouTube script with enhanced JSON handling')
+    parser = argparse.ArgumentParser(description='Generate YouTube script with enhanced JSON handling, deterministic chunking, and production safety validation')
     parser.add_argument('--category', required=True, help='Main category')
     parser.add_argument('--sub-category', required=True, help='Sub category')
     parser.add_argument('--episode', required=True, type=int, help='Episode number')
