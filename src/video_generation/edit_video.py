@@ -805,26 +805,49 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     log(f"   Run ID: {run_id}")
     
     # Setup paths
-    output_dir = Path('output/final')
+    output_dir = Path('output')
     output_dir.mkdir(parents=True, exist_ok=True)
     
     temp_video = output_dir / f'temp_shorts_{run_id}.mp4'
     assembled_video = output_dir / f'assembled_shorts_{run_id}.mp4'
-    output_file = output_dir / 'short_video.mp4'
+    output_file = output_dir / 'final_video_short.mp4'
     max_duration = 58  # YouTube Shorts max is 60 seconds, using 58 for safety
     
-    # Step 1: Get AUDIO AUTHORITY duration
-    audio_path = Path(audio_file)
-    if not audio_path.exists():
-        log(f"❌ Audio file not found: {audio_file}")
-        return None
+    # ============================================================================
+    # PRE-RENDER VALIDATION - CRITICAL DEBUG CHECK
+    # ============================================================================
+    log("=" * 80)
+    log("🔍 PRE-RENDER VALIDATION")
+    log("=" * 80)
     
+    audio_path = Path(audio_file)
+    log(f"Audio exists: {audio_path.exists()}")
+    if not audio_path.exists():
+        error_msg = f"FATAL: Audio file not found: {audio_file}"
+        log(error_msg, "ERROR")
+        raise RuntimeError(error_msg)
+    
+    subtitles_path = Path(subtitles_file) if subtitles_file else None
+    log(f"Subtitles exists: {subtitles_path.exists() if subtitles_path else 'Not provided'}")
+    
+    clips_path = Path(clips_dir)
+    log(f"Clips directory exists: {clips_path.exists()}")
+    
+    if clips_path.exists():
+        clip_files = list(clips_path.glob('*.mp4'))
+        log(f"Clips count: {len(clip_files)}")
+        if clip_files:
+            # Log first few clips for debugging
+            log(f"Sample clips: {', '.join([f.name for f in clip_files[:3]])}")
+    
+    log("=" * 80)
+    
+    # Step 1: Get AUDIO AUTHORITY duration
     audio_duration = get_audio_duration(audio_file)
     target_duration = min(audio_duration, max_duration)
     log(f"🎯 AUDIO AUTHORITY target duration: {target_duration:.2f}s")
     
     # Load and verify manifest
-    clips_path = Path(clips_dir)
     manifest_file = clips_path / 'manifest.json'
     
     # CRITICAL: Verify manifest integrity before proceeding
@@ -988,6 +1011,34 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
         log("⚠️ No subtitles file found, rendering without subtitles")
         shutil.copy2(video_for_subtitles, output_file)
         render_success = True
+    
+    # ============================================================================
+    # CRITICAL: POST-RENDER VALIDATION - SILENT FAILURES MUST BE IMPOSSIBLE
+    # ============================================================================
+    log("=" * 80)
+    log("🔍 Validating rendered video output...")
+    log("=" * 80)
+    
+    # Check if output file exists
+    if not output_file.exists():
+        error_msg = f"FATAL: Video rendering failed. {output_file} was not created."
+        log(error_msg, "ERROR")
+        raise RuntimeError(error_msg)
+    
+    # Check if output file is empty
+    if output_file.stat().st_size == 0:
+        error_msg = f"FATAL: Video rendering failed. {output_file} is empty."
+        log(error_msg, "ERROR")
+        raise RuntimeError(error_msg)
+    
+    # Check file size is reasonable (at least 100KB)
+    file_size_mb = output_file.stat().st_size / (1024 * 1024)
+    if file_size_mb < 0.1:  # Less than 100KB
+        error_msg = f"FATAL: Video file too small: {file_size_mb:.2f} MB. Likely corrupted."
+        log(error_msg, "ERROR")
+        raise RuntimeError(error_msg)
+    
+    log(f"✅ Video render validation successful. File size: {file_size_mb:.2f} MB")
     
     # Verify final output
     if not render_success or not output_file.exists() or output_file.stat().st_size == 0:
@@ -1185,25 +1236,48 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     log(f"   Run ID: {run_id}")
     
     # Setup paths
-    output_dir = Path('output/final')
+    output_dir = Path('output')
     output_dir.mkdir(parents=True, exist_ok=True)
     
     temp_video = output_dir / f'temp_long_{run_id}.mp4'
     assembled_video = output_dir / f'assembled_long_{run_id}.mp4'
-    output_file = output_dir / 'long_video.mp4'
+    output_file = output_dir / 'final_video_long.mp4'
+    
+    # ============================================================================
+    # PRE-RENDER VALIDATION - CRITICAL DEBUG CHECK
+    # ============================================================================
+    log("=" * 80)
+    log("🔍 PRE-RENDER VALIDATION")
+    log("=" * 80)
+    
+    audio_path = Path(audio_file)
+    log(f"Audio exists: {audio_path.exists()}")
+    if not audio_path.exists():
+        error_msg = f"FATAL: Audio file not found: {audio_file}"
+        log(error_msg, "ERROR")
+        raise RuntimeError(error_msg)
+    
+    subtitles_path = Path(subtitles_file) if subtitles_file else None
+    log(f"Subtitles exists: {subtitles_path.exists() if subtitles_path else 'Not provided'}")
+    
+    clips_path = Path(clips_dir)
+    log(f"Clips directory exists: {clips_path.exists()}")
+    
+    if clips_path.exists():
+        clip_files = list(clips_path.glob('*.mp4'))
+        log(f"Clips count: {len(clip_files)}")
+        if clip_files:
+            # Log first few clips for debugging
+            log(f"Sample clips: {', '.join([f.name for f in clip_files[:3]])}")
+    
+    log("=" * 80)
     
     # Step 1: Get AUDIO AUTHORITY duration
-    audio_path = Path(audio_file)
-    if not audio_path.exists():
-        log(f"❌ Audio file not found: {audio_file}")
-        return None
-    
     audio_duration = get_audio_duration(audio_file)
     target_duration = audio_duration
     log(f"🎯 AUDIO AUTHORITY target duration: {target_duration:.2f}s ({target_duration/60:.2f}m)")
     
     # Load and verify manifest
-    clips_path = Path(clips_dir)
     manifest_file = clips_path / 'manifest.json'
     
     # CRITICAL: Verify manifest integrity before proceeding
@@ -1364,6 +1438,34 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
         log("⚠️ No subtitles file found, rendering without subtitles")
         shutil.copy2(video_for_subtitles, output_file)
         render_success = True
+    
+    # ============================================================================
+    # CRITICAL: POST-RENDER VALIDATION - SILENT FAILURES MUST BE IMPOSSIBLE
+    # ============================================================================
+    log("=" * 80)
+    log("🔍 Validating rendered video output...")
+    log("=" * 80)
+    
+    # Check if output file exists
+    if not output_file.exists():
+        error_msg = f"FATAL: Video rendering failed. {output_file} was not created."
+        log(error_msg, "ERROR")
+        raise RuntimeError(error_msg)
+    
+    # Check if output file is empty
+    if output_file.stat().st_size == 0:
+        error_msg = f"FATAL: Video rendering failed. {output_file} is empty."
+        log(error_msg, "ERROR")
+        raise RuntimeError(error_msg)
+    
+    # Check file size is reasonable (at least 100KB)
+    file_size_mb = output_file.stat().st_size / (1024 * 1024)
+    if file_size_mb < 0.1:  # Less than 100KB
+        error_msg = f"FATAL: Video file too small: {file_size_mb:.2f} MB. Likely corrupted."
+        log(error_msg, "ERROR")
+        raise RuntimeError(error_msg)
+    
+    log(f"✅ Video render validation successful. File size: {file_size_mb:.2f} MB")
     
     # Verify final output
     if not render_success or not output_file.exists() or output_file.stat().st_size == 0:
