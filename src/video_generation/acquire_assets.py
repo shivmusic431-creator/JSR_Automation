@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
 Asset Acquisition - Downloads stock footage from Pexels based on target audio duration
-Uses open search strategy and prevents clip reuse via Firebase
+Uses open search strategy with NATURE PRIORITY and RANDOMIZED SELECTION
 Includes strict video validation to reject static images and low-quality clips
-NOW WITH ENHANCED DURATION GUARANTEE - Continues until total_clip_duration >= target_audio_duration
-STRICT PRODUCTION MODE - No test manifests, always acquires real clips
+TRUE RANDOMIZATION - Random queries, random pages, random clip selection
 AUDIO DURATION AUTHORITY - Uses ACTUAL audio file duration as single source of truth
 """
 import os
@@ -13,20 +12,11 @@ import argparse
 import requests
 import subprocess
 import time
+import random
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Optional, Tuple, Set
+from typing import List, Dict, Optional, Tuple
 import sys
-import glob
-
-# Firebase imports
-try:
-    import firebase_admin
-    from firebase_admin import credentials, firestore
-    FIREBASE_AVAILABLE = True
-except ImportError:
-    FIREBASE_AVAILABLE = False
-    print("⚠️ Firebase not available - install with: pip install firebase-admin")
 
 # ============================================================================
 # CONFIGURATION
@@ -38,57 +28,75 @@ if not PEXELS_API_KEY:
     sys.exit(1)
 
 PEXELS_VIDEO_API = "https://api.pexels.com/videos/search"
-PEXELS_PHOTO_API = "https://api.pexels.com/v1/search"
 
-# Open search queries (prioritized) - EXPANDED for more variety
-SEARCH_QUERIES = [
+# ============================================================================
+# SEARCH QUERIES - NATURE PRIORITY WITH RANDOMIZATION
+# ============================================================================
+
+# Nature queries - prioritized, will appear first in combined list
+NATURE_QUERIES = [
     "nature",
-    "sunset",
-    "sunrise", 
-    "people walking",
-    "indian people",
-    "city traffic",
-    "business meeting",
-    "technology",
-    "abstract background",
-    "office workers",
-    "crowd",
-    "street market",
-    "beach",
+    "forest", 
+    "sunrise",
+    "sunlight",
+    "moonlight",
     "mountains",
-    "urban life",
-    "aerial view",
-    "time lapse",
-    "slow motion",
-    "professional business",
-    "corporate",
-    "travel",
-    "adventure",
-    "fitness",
-    "sports",
-    "meditation",
-    "yoga",
-    "food",
-    "cooking",
-    "animals",
-    "wildlife",
-    "forest",
-    "ocean",
     "river",
-    "waterfall",
+    "ocean",
     "clouds",
     "sky",
+    "sunset",
+    "beach",
+    "waterfall",
     "stars",
-    "night",
-    "city夜景",
+    "night sky",
+    "wildlife",
+    "animals",
+    "birds",
+    "trees",
+    "flowers",
+    "green landscape",
+    "aerial nature",
+    "forest path",
+    "mountain lake",
+    "desert",
+    "snow",
+    "rain",
+    "storm",
+    "calm water",
+    "sun rays",
+    "dawn",
+    "dusk",
+    "natural light",
+    "earth",
+    "planet nature",
+    "environment",
+    "conservation",
+    "green energy",
+    "solar nature",
+    "wind nature",
+    "meditation nature",
+    "peaceful nature",
+    "relaxation nature"
+]
+
+# General queries - will appear after nature queries
+GENERAL_QUERIES = [
+    "people",
+    "city", 
+    "technology",
+    "travel",
+    "abstract",
+    "business",
+    "street",
+    "urban",
     "architecture",
-    "modern building",
     "office",
     "workspace",
-    "team meeting",
-    "presentation",
+    "team",
+    "meeting",
     "conference",
-    "interview",
+    "presentation",
     "discussion",
     "collaboration",
     "creative",
@@ -108,56 +116,23 @@ SEARCH_QUERIES = [
     "research",
     "medical",
     "healthcare",
-    "technology innovation",
-    "future",
-    "robotics",
-    "AI",
-    "virtual reality",
-    "augmented reality",
-    "digital transformation",
-    "cyberspace",
-    "data",
-    "analytics",
-    "marketing",
-    "social media",
-    "mobile phone",
-    "laptop",
-    "computer",
-    "coding",
-    "programming",
-    "startup",
-    "entrepreneur",
-    "success",
-    "achievement",
-    "motivation",
-    "inspiration",
-    "dream",
-    "goal",
-    "target",
-    "focus",
-    "concentration",
-    "mindfulness",
-    "peace",
-    "calm",
-    "relaxation",
-    "spa",
-    "wellness",
-    "beauty",
-    "fashion",
+    "fitness",
+    "sports",
+    "yoga",
+    "cooking",
+    "food",
     "shopping",
     "luxury",
     "car",
     "driving",
     "road trip",
-    "journey",
+    "adventure",
     "exploration",
-    "discovery",
     "freedom",
     "happiness",
     "joy",
     "laughter",
     "love",
-    "romance",
     "friendship",
     "community",
     "diversity",
@@ -168,19 +143,27 @@ SEARCH_QUERIES = [
     "ancient",
     "modern",
     "innovation",
-    "sustainability",
-    "environment",
-    "green energy",
-    "renewable",
-    "solar",
-    "wind",
-    "nature conservation",
-    "earth",
-    "planet",
-    "space",
-    "universe",
-    "galaxy",
-    "cosmos"
+    "future",
+    "digital",
+    "coding",
+    "programming",
+    "startup",
+    "entrepreneur",
+    "success",
+    "achievement",
+    "motivation",
+    "inspiration",
+    "dream",
+    "goal",
+    "focus",
+    "concentration",
+    "mindfulness",
+    "peace",
+    "calm",
+    "spa",
+    "wellness",
+    "beauty",
+    "fashion"
 ]
 
 # API rate limiting
@@ -199,11 +182,6 @@ MIN_ACCEPTABLE_RESOLUTION = {
     'short': {'width': 720, 'height': 1280}   # Minimum 720p portrait for shorts
 }
 
-# Duration guarantee constants - ENHANCED
-MAX_SAFETY_MULTIPLIER = 5  # Maximum 5x target duration to prevent infinite loops
-MIN_CLIPS_TO_ATTEMPT = 3  # Minimum number of clips to attempt even if duration met early
-MAX_PAGES_TO_SEARCH = 500  # Absolute maximum pages to prevent infinite loops
-
 # Output directories
 OUTPUT_DIR = Path('output')
 CLIPS_DIR = OUTPUT_DIR / 'clips'
@@ -220,116 +198,32 @@ def log(message: str, level: str = "INFO"):
     sys.stdout.flush()
 
 # ============================================================================
-# FIREBASE MANAGEMENT
+# RANDOMIZED SEARCH QUERY GENERATION
 # ============================================================================
 
-class FirebaseManager:
-    """Manages Firebase Firestore operations for clip usage tracking"""
+def get_randomized_search_queries() -> List[str]:
+    """
+    Generate randomized search queries with nature priority.
     
-    def __init__(self):
-        self.db = None
-        self.initialized = False
-        self._init_firebase()
-        self.used_clips_cache: Set[int] = set()  # Cache to reduce Firebase calls
+    Returns:
+        List of search queries with nature queries first (randomized internally),
+        followed by general queries (randomized internally)
+    """
+    # Create copies to avoid modifying originals
+    nature_copy = NATURE_QUERIES.copy()
+    general_copy = GENERAL_QUERIES.copy()
     
-    def _init_firebase(self):
-        """Initialize Firebase connection"""
-        if not FIREBASE_AVAILABLE:
-            log("Firebase not available - skipping initialization", "WARNING")
-            return
-        
-        service_account_json = os.getenv('FIREBASE_SERVICE_ACCOUNT_JSON')
-        
-        if not service_account_json:
-            log("FIREBASE_SERVICE_ACCOUNT_JSON not set - skipping Firebase", "WARNING")
-            return
-        
-        try:
-            # Parse service account JSON
-            service_account_info = json.loads(service_account_json)
-            cred = credentials.Certificate(service_account_info)
-            
-            try:
-                app = firebase_admin.initialize_app(cred)
-            except ValueError:
-                # App already initialized
-                pass
-            
-            self.db = firestore.client()
-            self.initialized = True
-            log("✅ Firebase initialized successfully")
-            
-            # Pre-load recently used clips to reduce API calls
-            self._cache_recent_clips()
-            
-        except Exception as e:
-            log(f"Firebase initialization failed: {e}", "WARNING")
-            self.initialized = False
+    # Randomize both lists
+    random.shuffle(nature_copy)
+    random.shuffle(general_copy)
     
-    def _cache_recent_clips(self):
-        """Cache recently used clip IDs to reduce Firebase calls"""
-        if not self.initialized or not self.db:
-            return
-        
-        try:
-            # Get clips used in the last 7 days
-            from datetime import datetime, timedelta
-            seven_days_ago = datetime.now() - timedelta(days=7)
-            
-            docs = self.db.collection('used_clips')\
-                .where('used_at', '>=', seven_days_ago)\
-                .limit(1000)\
-                .stream()
-            
-            for doc in docs:
-                try:
-                    clip_id = int(doc.id)
-                    self.used_clips_cache.add(clip_id)
-                except ValueError:
-                    pass
-            
-            log(f"✅ Cached {len(self.used_clips_cache)} recently used clips")
-        except Exception as e:
-            log(f"Failed to cache recent clips: {e}", "WARNING")
+    # Combine with nature first
+    combined = nature_copy + general_copy
     
-    def is_clip_used(self, clip_id: int) -> bool:
-        """Check if clip ID exists in used_clips collection"""
-        # Check cache first
-        if clip_id in self.used_clips_cache:
-            return True
-        
-        if not self.initialized or not self.db:
-            return False
-        
-        try:
-            doc_ref = self.db.collection('used_clips').document(str(clip_id))
-            doc = doc_ref.get()
-            is_used = doc.exists
-            
-            if is_used:
-                self.used_clips_cache.add(clip_id)
-            
-            return is_used
-        except Exception as e:
-            log(f"Firebase check failed for clip {clip_id}: {e}", "WARNING")
-            return False  # Assume not used if check fails
+    log(f"🎲 Generated {len(combined)} randomized search queries")
+    log(f"🌿 Nature queries first ({len(nature_copy)} queries), then general ({len(general_copy)} queries)")
     
-    def mark_clip_used(self, clip_id: int, duration: float):
-        """Mark clip as used in Firebase"""
-        if not self.initialized or not self.db:
-            return
-        
-        try:
-            doc_ref = self.db.collection('used_clips').document(str(clip_id))
-            doc_ref.set({
-                'clip_id': clip_id,
-                'duration': duration,
-                'used_at': firestore.SERVER_TIMESTAMP
-            })
-            self.used_clips_cache.add(clip_id)
-            log(f"✅ Marked clip {clip_id} as used in Firebase")
-        except Exception as e:
-            log(f"Failed to mark clip {clip_id} as used: {e}", "WARNING")
+    return combined
 
 # ============================================================================
 # AUDIO DURATION EXTRACTION - ACTUAL AUDIO AS SINGLE SOURCE OF TRUTH
@@ -613,18 +507,19 @@ def verify_clip_readable(clip_path: Path) -> bool:
         return False
 
 # ============================================================================
-# PEXELS API
+# PEXELS API - WITH RANDOMIZED PAGINATION
 # ============================================================================
 
 def search_pexels_videos(query: str, video_type: str, per_page: int = 15, page: int = 1) -> Dict:
     """
     Search Pexels for videos with unlimited pagination
+    Page number is randomized for each search to ensure variety
     
     Args:
         query: Search query
         video_type: 'long' or 'short' for orientation filtering
         per_page: Results per page
-        page: Page number for pagination (no upper limit)
+        page: Page number for pagination (now randomized)
         
     Returns:
         Pexels API response as dict
@@ -645,7 +540,7 @@ def search_pexels_videos(query: str, video_type: str, per_page: int = 15, page: 
     
     for attempt in range(MAX_RETRIES):
         try:
-            log(f"🔍 Searching Pexels: '{query}' (page {page}, orientation: {orientation}) (attempt {attempt + 1}/{MAX_RETRIES})")
+            log(f"🔍 Searching Pexels: '{query}' (randomized page {page}, orientation: {orientation}) (attempt {attempt + 1}/{MAX_RETRIES})")
             response = requests.get(
                 PEXELS_VIDEO_API,
                 headers=headers,
@@ -753,10 +648,10 @@ def download_video(url: str, output_path: Path) -> bool:
         return False
 
 # ============================================================================
-# CLIP VERIFICATION AND REPLACEMENT
+# CLIP VERIFICATION
 # ============================================================================
 
-def verify_and_repair_manifest(manifest_path: Path, clips_dir: Path, video_type: str, firebase: FirebaseManager) -> Tuple[List[Dict], float]:
+def verify_and_repair_manifest(manifest_path: Path, clips_dir: Path, video_type: str) -> Tuple[List[Dict], float]:
     """
     Verify all clips in manifest exist and are valid.
     Remove invalid clips and return updated list and total duration.
@@ -858,23 +753,22 @@ def get_clip_duration(clip_path: Path) -> float:
         return 0.0
 
 # ============================================================================
-# MAIN ACQUISITION FUNCTION - ENHANCED DURATION GUARANTEE
+# MAIN ACQUISITION FUNCTION - WITH TRUE RANDOMIZATION
 # ============================================================================
 
 def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
     """
     Acquire stock footage based on ACTUAL AUDIO DURATION as single source of truth
-    ENHANCED DURATION GUARANTEE: Continues until total_clip_duration >= target_audio_duration
-    STRICT PRODUCTION MODE: Always detects audio and downloads real clips
-    Includes strict validation to reject static images and low-quality clips
+    TRUE RANDOMIZATION - Random queries, random pages, random clip selection
+    NATURE PRIORITY - Nature queries always appear first in randomized order
+    NO CLIP REUSE TRACKING - All clips are allowed, randomness ensures variety
     
-    DURATION GUARANTEE RULES:
+    DURATION AUTHORITY RULES:
     - target_duration = ACTUAL audio file duration (ffprobe)
     - total_clip_duration must be >= target_duration
-    - Continue downloading until total_clip_duration >= target_duration
+    - total_clip_duration must be <= target_duration + 20 seconds
+    - If next clip causes overflow beyond target_duration + 20s, still accept it
     - NEVER stop below target_duration
-    - Safety cap of 5x target duration to prevent infinite loops
-    - Minimum 3 clips even if duration met early (for variety)
     
     Args:
         script_file: Path to script JSON (unused but kept for compatibility)
@@ -889,7 +783,7 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
     """
     
     log("=" * 80)
-    log("🎬 ASSET ACQUISITION - ENHANCED DURATION GUARANTEE MODE")
+    log("🎬 ASSET ACQUISITION - TRUE RANDOMIZATION MODE")
     log("=" * 80)
     log(f"Run ID: {run_id}")
     log(f"Video type: {video_type}")
@@ -907,78 +801,65 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
         log(f"⚠️ Short video duration exceeds 58s, limiting to 58s")
         target_duration = 58
     
-    # Safety cap to prevent infinite loops (5x target duration)
-    safety_cap_duration = target_duration * MAX_SAFETY_MULTIPLIER
-    
     log(f"🎯 AUDIO AUTHORITY TARGET DURATION: {target_duration:.2f}s ({target_duration/60:.2f}m)")
     log(f"🎯 This is the SINGLE SOURCE OF TRUTH - all clip acquisition will target this")
-    log(f"🛡️ SAFETY CAP DURATION (5x target): {safety_cap_duration:.2f}s")
-    log(f"🛡️ Will stop if total exceeds safety cap to prevent infinite loops")
-    log(f"🛡️ Minimum clips to attempt: {MIN_CLIPS_TO_ATTEMPT} (for variety)")
     
-    # Step 2: Initialize Firebase
-    firebase = FirebaseManager()
+    # Maximum allowed duration (target + 20 seconds)
+    max_allowed_duration = target_duration + 20.0
+    log(f"🎯 Maximum allowed clip duration (target + 20s): {max_allowed_duration:.2f}s")
     
-    # Step 3: Setup output directory
+    # Step 2: Setup output directory
     CLIPS_DIR.mkdir(parents=True, exist_ok=True)
     
-    # Step 4: Check if we have existing valid clips
-    valid_clips, existing_duration = verify_and_repair_manifest(MANIFEST_FILE, CLIPS_DIR, video_type, firebase)
+    # Step 3: Check if we have existing valid clips
+    valid_clips, existing_duration = verify_and_repair_manifest(MANIFEST_FILE, CLIPS_DIR, video_type)
     
-    # CRITICAL: CUMULATIVE DURATION LOGIC - Track total duration, not individual clips
+    # CRITICAL: CUMULATIVE DURATION LOGIC - NOT INDIVIDUAL CLIP SELECTION
     downloaded_duration = existing_duration
     downloaded_clips = valid_clips.copy()
     
-    # Check if existing clips already meet requirement
     if downloaded_duration >= target_duration:
         log(f"✅ Existing valid clips already meet audio duration requirement: {downloaded_duration:.2f}s >= {target_duration:.2f}s")
-        
-        # Even if duration met, ensure we have at least MIN_CLIPS_TO_ATTEMPT for variety
-        if len(downloaded_clips) >= MIN_CLIPS_TO_ATTEMPT:
-            log(f"✅ Have {len(downloaded_clips)} clips which meets minimum variety requirement")
-            return MANIFEST_FILE
-        else:
-            log(f"⚠️ Only have {len(downloaded_clips)} clips, need at least {MIN_CLIPS_TO_ATTEMPT} for variety")
-            log(f"🔄 Will attempt to download more clips for variety")
-    else:
-        log(f"📊 Existing valid clips: {downloaded_duration:.2f}s / {target_duration:.2f}s needed ({downloaded_duration/target_duration*100:.1f}%)")
+        if downloaded_duration > max_allowed_duration:
+            log(f"⚠️ Warning: Existing clips exceed max allowed by {downloaded_duration - max_allowed_duration:.1f}s")
+        return MANIFEST_FILE
+    
+    if valid_clips:
+        log(f"📊 Existing valid clips: {downloaded_duration:.2f}s / {target_duration:.2f}s needed")
         log(f"🔄 Need additional {target_duration - downloaded_duration:.2f}s of footage")
     
+    # Step 4: Generate randomized search queries with nature priority
+    SEARCH_QUERIES = get_randomized_search_queries()
+    
     # Step 5: Download additional clips until cumulative duration reaches target
-    # or safety cap is hit
-    used_queries = set()
+    # TRUE UNLIMITED PAGINATION WITH RANDOMIZATION - Continue until API returns no results
     skipped_count = 0
     validation_failures = 0
     page = 1
     total_searched_pages = 0
     query_index = 0
     api_exhausted = False
-    consecutive_empty_pages = 0
-    MAX_CONSECUTIVE_EMPTY_PAGES = 5  # Stop if we get 5 consecutive empty pages
+    initial_page = random.randint(1, 10)  # Random starting page
     
-    log("🚀 Starting clip acquisition with DURATION GUARANTEE LOGIC...")
-    log("📊 Will continue searching page by page until:")
-    log(f"   - Cumulative clip duration >= {target_duration:.2f}s (AUDIO AUTHORITY), AND")
-    log(f"   - At least {MIN_CLIPS_TO_ATTEMPT} clips downloaded")
-    log("📊 OR stop if:")
-    log(f"   - Safety cap of {safety_cap_duration:.2f}s is reached")
-    log(f"   - {MAX_CONSECUTIVE_EMPTY_PAGES} consecutive empty pages")
-    log(f"   - API returns no more results")
+    log("🚀 Starting clip acquisition with CUMULATIVE DURATION LOGIC and RANDOMIZED SELECTION...")
+    log("📊 Will continue searching page by page until either:")
+    log(f"   - Cumulative clip duration >= {target_duration:.2f}s (AUDIO AUTHORITY), OR")
+    log("   - API returns no more results")
+    log("📊 RANDOMIZATION FEATURES:")
+    log("   - Nature queries always first (randomized internally)")
+    log("   - General queries follow (randomized internally)")
+    log(f"   - Starting from random page: {initial_page}")
+    log("   - Results shuffled before selection")
+    log("📊 RULES:")
+    log("   - DO NOT stop below target_duration")
+    log("   - If next clip causes overflow, still accept it")
+    log(f"   - Maximum allowed total: {max_allowed_duration:.2f}s")
     
-    # Keep downloading until we have enough cumulative duration or hit limits
-    while (downloaded_duration < target_duration or len(downloaded_clips) < MIN_CLIPS_TO_ATTEMPT) and not api_exhausted:
-        # Check safety cap
-        if downloaded_duration >= safety_cap_duration:
-            log(f"🛡️ SAFETY CAP REACHED: {downloaded_duration:.2f}s >= {safety_cap_duration:.2f}s")
-            log(f"🛡️ Stopping to prevent infinite loop")
-            break
-        
-        # Check page limit
-        if total_searched_pages >= MAX_PAGES_TO_SEARCH:
-            log(f"🛡️ MAX PAGE LIMIT REACHED: {MAX_PAGES_TO_SEARCH} pages searched")
-            log(f"🛡️ Stopping to prevent infinite loop")
-            break
-        
+    # Set current page to randomized initial page
+    page = initial_page
+    
+    # Keep downloading until we have enough cumulative duration or API is exhausted
+    while downloaded_duration < target_duration and not api_exhausted:
         found_any_on_page = False
         page_results_count = 0
         page_has_more = False
@@ -988,16 +869,10 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
             # Rotate through queries
             current_query = SEARCH_QUERIES[(query_index + query_offset) % len(SEARCH_QUERIES)]
             
-            # Check if we've met both duration and minimum clip requirements
-            if downloaded_duration >= target_duration and len(downloaded_clips) >= MIN_CLIPS_TO_ATTEMPT:
-                log(f"✅ Met both duration and minimum clip requirements")
+            if downloaded_duration >= target_duration:
                 break
             
-            if current_query in used_queries and page == 1:
-                # Skip queries we've already used on page 1
-                continue
-            
-            log(f"\n📋 Searching: '{current_query}' (page {page})")
+            log(f"\n📋 Searching: '{current_query}' (randomized page {page})")
             
             # Search Pexels with proper pagination and orientation
             results = search_pexels_videos(current_query, video_type, per_page=15, page=page)
@@ -1011,31 +886,26 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
                 log(f"No videos found for '{current_query}' on page {page}")
                 continue
             
+            # RANDOMIZE VIDEO RESULTS BEFORE PROCESSING
+            random.shuffle(videos)
+            log(f"🎲 Randomized {len(videos)} videos for selection")
+            
             page_results_count += len(videos)
             log(f"Found {len(videos)} videos for '{current_query}' on page {page}")
             
             # Process each video
             for video in videos:
-                # Check if we've met both duration and minimum clip requirements
-                if downloaded_duration >= target_duration and len(downloaded_clips) >= MIN_CLIPS_TO_ATTEMPT:
-                    log(f"✅ Met both duration and minimum clip requirements - stopping")
-                    break
-                
-                # Check safety cap
-                if downloaded_duration >= safety_cap_duration:
-                    log(f"🛡️ Safety cap reached - stopping")
+                # CRITICAL: Check CUMULATIVE DURATION, not individual clip selection
+                if downloaded_duration >= target_duration:
+                    log(f"✅ Cumulative target reached: {downloaded_duration:.2f}s >= {target_duration:.2f}s")
                     break
                 
                 video_id = video.get('id')
                 if not video_id:
                     continue
                 
-                # Check if clip was already used
-                if firebase.is_clip_used(video_id):
-                    skipped_count += 1
-                    if skipped_count % 10 == 0:
-                        log(f"Skipped {skipped_count} already-used clips", "INFO")
-                    continue
+                # NO CLIP REUSE TRACKING - All clips are allowed
+                # Randomness ensures variety without tracking restrictions
                 
                 # Get best quality video file with correct orientation
                 video_info = get_best_video_file(video, video_type)
@@ -1053,7 +923,7 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
                 clip_attempts = 0
                 valid_clip_found = False
                 
-                while clip_attempts < MAX_RETRIES_PER_CLIP and not valid_clip_found:
+                while clip_attempts < MAX_RETRIES_PER_CLIP and not valid_clip_found and downloaded_duration < target_duration:
                     clip_attempts += 1
                     
                     # Generate temporary filename
@@ -1076,9 +946,6 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
                             # Rename temp to final
                             temp_path.rename(final_path)
                             
-                            # Mark as used in Firebase
-                            firebase.mark_clip_used(video_id, clip_duration)
-                            
                             # CRITICAL: CUMULATIVE DURATION - add to total
                             downloaded_clips.append({
                                 'clip_id': video_id,
@@ -1098,20 +965,18 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
                             found_any_on_page = True
                             valid_clip_found = True
                             
-                            # Calculate progress
-                            progress_pct = (downloaded_duration / target_duration) * 100 if target_duration > 0 else 0
+                            # Check overflow status
+                            overflow = downloaded_duration - target_duration
+                            overflow_status = ""
+                            if overflow > 0:
+                                overflow_status = f" (OVERFLOW: +{overflow:.1f}s)"
                             
-                            # Status indicators
-                            duration_status = "✅ MET" if downloaded_duration >= target_duration else "⬜ NOT MET"
-                            clip_status = "✅ MET" if len(downloaded_clips) >= MIN_CLIPS_TO_ATTEMPT else "⬜ NOT MET"
+                            log(f"✅ Added: {final_filename} ({clip_duration:.1f}s, {width}x{height}){overflow_status}")
+                            log(f"📊 CUMULATIVE PROGRESS: {downloaded_duration:.1f}s / {target_duration:.1f}s ({downloaded_duration/target_duration*100:.1f}%)")
                             
-                            log(f"✅ Added: {final_filename} ({clip_duration:.1f}s, {width}x{height})")
-                            log(f"📊 CUMULATIVE PROGRESS: {downloaded_duration:.1f}s / {target_duration:.1f}s ({progress_pct:.1f}%) - {duration_status}")
-                            log(f"📊 CLIP COUNT: {len(downloaded_clips)} / {MIN_CLIPS_TO_ATTEMPT} minimum - {clip_status}")
-                            
-                            # Check safety cap
-                            if downloaded_duration > safety_cap_duration:
-                                log(f"⚠️ Cumulative duration exceeds safety cap by {downloaded_duration - safety_cap_duration:.1f}s")
+                            # Check against max allowed
+                            if downloaded_duration > max_allowed_duration:
+                                log(f"⚠️ Cumulative duration exceeds max allowed by {downloaded_duration - max_allowed_duration:.1f}s")
                         else:
                             # Invalid clip - delete and retry
                             validation_failures += 1
@@ -1133,9 +998,6 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
                 # Rate limiting
                 time.sleep(REQUEST_DELAY)
             
-            # Mark query as used for tracking
-            if page == 1:
-                used_queries.add(current_query)
             time.sleep(REQUEST_DELAY)
         
         # Update query index for next page rotation
@@ -1143,52 +1005,36 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
         
         # Page processing summary
         total_searched_pages += 1
-        
-        if found_any_on_page:
-            consecutive_empty_pages = 0
-            log(f"\n📊 Page {page} summary: Found {page_results_count} videos, ✅ found valid clips")
-        else:
-            consecutive_empty_pages += 1
-            log(f"\n📊 Page {page} summary: Found {page_results_count} videos, ❌ no valid clips (empty page #{consecutive_empty_pages})")
-            
-            # Check for consecutive empty pages
-            if consecutive_empty_pages >= MAX_CONSECUTIVE_EMPTY_PAGES:
-                log(f"🛡️ {MAX_CONSECUTIVE_EMPTY_PAGES} consecutive empty pages - stopping search")
-                break
+        log(f"\n📊 Page {page} summary: Found {page_results_count} videos, {found_any_on_page and '✅ found valid clips' or '❌ no valid clips'}")
         
         # Check if API is exhausted (no next_page for any query on this page and no videos found)
         if not page_has_more and page_results_count == 0:
             api_exhausted = True
             log(f"⚠️ API returned no more results after {total_searched_pages} pages")
-            break
         
         # Always move to next page if there might be more results
         if page_has_more:
             page += 1
             log(f"➡️ Moving to page {page} - Searched {total_searched_pages} pages total")
         
-        # Progress report every 5 pages
-        if total_searched_pages % 5 == 0:
-            progress_pct = (downloaded_duration / target_duration) * 100 if target_duration > 0 else 0
+        # Progress report every 10 pages
+        if total_searched_pages % 10 == 0:
             log(f"\n{'='*60}")
             log(f"📈 PROGRESS REPORT after {total_searched_pages} pages searched")
-            log(f"   CUMULATIVE: {downloaded_duration:.1f}s / {target_duration:.1f}s ({progress_pct:.1f}%)")
-            log(f"   Valid clips: {len(downloaded_clips)} (min required: {MIN_CLIPS_TO_ATTEMPT})")
-            log(f"   Skipped (used): {skipped_count}")
+            log(f"   CUMULATIVE: {downloaded_duration:.1f}s / {target_duration:.1f}s ({downloaded_duration/target_duration*100:.1f}%)")
+            log(f"   Valid clips: {len(downloaded_clips)}")
             log(f"   Validation failures: {validation_failures}")
             log(f"{'='*60}\n")
     
-    # Step 5: Final validation - STRICT DURATION ENFORCEMENT
+    # Step 5: Final validation - STRICT AUDIO AUTHORITY ENFORCEMENT
     log("\n" + "=" * 80)
-    log("📊 ACQUISITION SUMMARY - DURATION GUARANTEE CHECK")
+    log("📊 ACQUISITION SUMMARY - AUDIO DURATION AS SINGLE SOURCE OF TRUTH")
     log("=" * 80)
     log(f"AUDIO AUTHORITY target duration: {target_duration:.2f}s")
-    log(f"Safety cap (5x target): {safety_cap_duration:.2f}s")
+    log(f"Maximum allowed (target + 20s): {max_allowed_duration:.2f}s")
     log(f"CUMULATIVE downloaded duration: {downloaded_duration:.2f}s")
     log(f"Difference from target: {downloaded_duration - target_duration:+.2f}s")
-    log(f"Progress percentage: {(downloaded_duration/target_duration*100):.1f}%")
-    log(f"Clips downloaded: {len(downloaded_clips)} (minimum required: {MIN_CLIPS_TO_ATTEMPT})")
-    log(f"Clips skipped (already used): {skipped_count}")
+    log(f"Clips downloaded: {len(downloaded_clips)}")
     log(f"Validation failures: {validation_failures}")
     log(f"Pages searched: {total_searched_pages}")
     log(f"Final page reached: {page}")
@@ -1198,7 +1044,7 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
     if downloaded_duration < target_duration:
         error_msg = (
             f"❌ FATAL: Downloaded cumulative duration ({downloaded_duration:.1f}s) "
-            f"is less than AUDIO AUTHORITY target ({target_duration:.1f}s) after exhaustive search "
+            f"is less than AUDIO AUTHORITY target ({target_duration:.1f}s) even after exhaustive search "
             f"({total_searched_pages} pages, API exhausted: {api_exhausted}). "
             f"Cannot proceed with black video sections. "
             f"Pipeline must stop immediately."
@@ -1206,33 +1052,29 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
         log(error_msg, "ERROR")
         raise RuntimeError(error_msg)
     
-    if len(downloaded_clips) < MIN_CLIPS_TO_ATTEMPT:
-        log(f"⚠️ WARNING: Only have {len(downloaded_clips)} clips, minimum recommended is {MIN_CLIPS_TO_ATTEMPT}")
-        log(f"   But duration requirement is met ({downloaded_duration:.1f}s >= {target_duration:.1f}s)")
-        log(f"   Proceeding with available clips")
+    if downloaded_duration > max_allowed_duration:
+        log(f"⚠️ WARNING: Cumulative duration exceeds max allowed by {downloaded_duration - max_allowed_duration:.1f}s")
+        log(f"   This is acceptable per rules - overflow clips are accepted")
     
-    if downloaded_duration > safety_cap_duration:
-        log(f"⚠️ WARNING: Cumulative duration exceeds safety cap by {downloaded_duration - safety_cap_duration:.1f}s")
-        log(f"   This is acceptable as we have met duration requirement")
-    
-    # Step 6: Save manifest with real clips only - INCLUDE ALL METRICS
+    # Step 6: Save manifest with real clips only - INCLUDE CUMULATIVE DURATION
     manifest = {
         'run_id': run_id,
         'video_type': video_type,
         'audio_authority_target': target_duration,  # Single source of truth
         'target_duration': target_duration,
-        'safety_cap_duration': safety_cap_duration,
+        'max_allowed_duration': max_allowed_duration,
         'total_clip_duration': downloaded_duration,  # Cumulative total
         'downloaded_duration': downloaded_duration,
         'clips_downloaded': len(downloaded_clips),
-        'minimum_clips_required': MIN_CLIPS_TO_ATTEMPT,
-        'clips_skipped': skipped_count,
         'validation_failures': validation_failures,
         'pages_searched': total_searched_pages,
         'final_page': page,
         'api_exhausted': api_exhausted,
-        'duration_requirement_met': downloaded_duration >= target_duration,
-        'clips_requirement_met': len(downloaded_clips) >= MIN_CLIPS_TO_ATTEMPT,
+        'randomization': {
+            'initial_page': initial_page,
+            'nature_queries_count': len(NATURE_QUERIES),
+            'general_queries_count': len(GENERAL_QUERIES)
+        },
         'clips': downloaded_clips,
         'generated_at': datetime.now().isoformat()
     }
@@ -1245,10 +1087,9 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
     log(f"✅ CUMULATIVE total duration: {downloaded_duration:.2f}s")
     log(f"✅ AUDIO AUTHORITY target: {target_duration:.2f}s")
     log(f"✅ Difference: {downloaded_duration - target_duration:+.2f}s")
-    log(f"✅ Duration requirement met: {downloaded_duration >= target_duration}")
     
     # Step 7: Final verification before returning
-    final_clips, final_duration = verify_and_repair_manifest(MANIFEST_FILE, CLIPS_DIR, video_type, firebase)
+    final_clips, final_duration = verify_and_repair_manifest(MANIFEST_FILE, CLIPS_DIR, video_type)
     
     if final_duration < target_duration:
         error_msg = (
@@ -1262,11 +1103,11 @@ def acquire_assets(script_file: str, video_type: str, run_id: str) -> Path:
     return MANIFEST_FILE
 
 # ============================================================================
-# CLI ENTRY POINT - STRICT PRODUCTION MODE
+# CLI ENTRY POINT
 # ============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description='Acquire stock footage from Pexels - ENHANCED DURATION GUARANTEE MODE')
+    parser = argparse.ArgumentParser(description='Acquire stock footage from Pexels - TRUE RANDOMIZATION MODE')
     parser.add_argument('--script-file', required=True,
                        help='Path to script JSON (unused but kept for compatibility)')
     parser.add_argument('--run-id', required=True,
@@ -1277,15 +1118,16 @@ def main():
     args = parser.parse_args()
     
     try:
-        # PRODUCTION MODE ONLY: Always acquire real clips, never create test manifests
+        # Initialize random seed for true randomness
+        random.seed()
+        
         manifest_path = acquire_assets(
             args.script_file,
             args.video_type,
             args.run_id
         )
         
-        log(f"✅ Asset acquisition complete - Manifest created with real clips based on AUDIO AUTHORITY")
-        log(f"✅ DURATION GUARANTEE: Total clip duration >= target audio duration")
+        log(f"✅ Asset acquisition complete - Manifest created with randomized clips based on AUDIO AUTHORITY")
         
     except RuntimeError as e:
         log(f"❌ FATAL: {e}", "ERROR")
