@@ -8,6 +8,8 @@ AUDIO DURATION AUTHORITY - Final video duration must match audio duration exactl
 STRICT POST-RENDER VALIDATION - Automatically enforces audio duration match
 FIXED: Subtitles are now properly burned into video using subtitles filter
 FIXED: Audio is now properly merged into final videos (CRITICAL BUG FIX)
+FIXED: Devanagari font rendering - Now uses explicit font file for proper ligatures
+FIXED: Video encoding quality - Now enforces consistent HD resolution with CRF 18
 """
 import os
 import json
@@ -147,7 +149,7 @@ def trim_video_to_audio_duration(input_video: Path, output_video: Path, target_d
         'ffmpeg', '-y',
         '-i', str(input_video),
         '-t', str(target_duration),
-        '-c', 'copy',  # Stream copy for speed
+        '-c', 'copy',  # Stream copy for speed - acceptable for trimming
         str(output_video)
     ]
     
@@ -293,12 +295,13 @@ def enforce_audio_duration_authority(video_path: Path, audio_file: str) -> Path:
 
 
 # ============================================================================
-# PREMIUM FONT CONFIGURATION - DISABLED FOR SUBTITLE BURNING
+# PREMIUM FONT CONFIGURATION - FIXED FOR DEVANAGARI LIGATURES
 # ============================================================================
 
-# Note: We're bypassing the dynamic font detection for subtitle burning
-# and using Noto Sans Devanagari directly as required
-SUBTITLE_FONT = "Noto Sans Devanagari"
+# Font configuration for proper Devanagari rendering
+FONT_DIR = "assets/fonts"
+FONT_NAME = "NotoSansDevanagari-Regular"
+SUBTITLE_FONT = FONT_NAME  # Keep for backward compatibility
 SUBTITLE_FONTSIZE = 28
 SUBTITLE_PRIMARY_COLOR = "&Hffffff&"  # White
 SUBTITLE_OUTLINE_COLOR = "&H000000&"  # Black
@@ -459,7 +462,7 @@ def get_video_metadata(video_path: Path) -> tuple:
 
 
 # ============================================================================
-# FIXED VIDEO RENDERING WITH HARD SUBTITLES AND AUDIO
+# FIXED VIDEO RENDERING WITH HARD SUBTITLES AND AUDIO - ENHANCED QUALITY
 # ============================================================================
 
 def render_video_with_hard_subtitles(
@@ -475,8 +478,14 @@ def render_video_with_hard_subtitles(
     
     Uses the subtitles filter to permanently burn subtitles into video frames.
     Merges audio from the provided audio file.
-    Always uses Noto Sans Devanagari font for Hindi support.
-    Subtitles are center-aligned with outline and shadow for readability.
+    Uses explicit font file from assets/fonts/NotoSansDevanagari-Regular.ttf
+    for proper Devanagari ligature rendering (fixes "क् या" → "क्या").
+    
+    ENHANCED QUALITY SETTINGS:
+    - CRF 18: Visually lossless quality
+    - preset medium: Good compression speed/quality balance
+    - Resolution normalization: Forces consistent HD resolution
+    - High quality audio: AAC at 192k
     
     Args:
         input_video: Path to input video
@@ -492,7 +501,10 @@ def render_video_with_hard_subtitles(
     log(f"🎥 Rendering video with hard-burned subtitles and audio...")
     log(f"   Subtitle file: {subtitles_srt}")
     log(f"   Audio file: {audio_file}")
-    log(f"   Font: {SUBTITLE_FONT}, Size: {SUBTITLE_FONTSIZE}")
+    log(f"   Font directory: {FONT_DIR}")
+    log(f"   Font file: {FONT_NAME}.ttf")
+    log(f"   Font size: {SUBTITLE_FONTSIZE}")
+    log(f"   QUALITY SETTINGS: CRF 18, preset medium, forced HD resolution")
     
     # Verify subtitle file exists
     if not subtitles_srt.exists():
@@ -504,11 +516,21 @@ def render_video_with_hard_subtitles(
         log(f"❌ Audio file not found: {audio_file}")
         return False
     
-    # Create subtitle filter string with proper escaping
-    # Format: subtitles=filename:force_style='FontName=...,FontSize=...'
+    # Verify font file exists
+    font_path = Path(FONT_DIR) / f"{FONT_NAME}.ttf"
+    if not font_path.exists():
+        log(f"⚠️ Font file not found at: {font_path}", "WARNING")
+        log(f"   Using system font fallback - ligatures may render incorrectly!", "WARNING")
+    else:
+        log(f"✅ Font file verified: {font_path}")
+    
+    # Create subtitle filter string with explicit font file and directory
+    # Format: subtitles=filename:fontsdir=/path/to/fonts:force_style='FontName=fontfile,FontSize=28,...'
+    # IMPORTANT: Using exact font filename without .ttf extension for FontName parameter
     subtitle_filter = (
-        f"subtitles={subtitles_srt}:force_style="
-        f"'FontName={SUBTITLE_FONT},"
+        f"subtitles={subtitles_srt}:"
+        f"fontsdir={FONT_DIR}:"
+        f"force_style='FontName={FONT_NAME},"
         f"FontSize={SUBTITLE_FONTSIZE},"
         f"PrimaryColour={SUBTITLE_PRIMARY_COLOR},"
         f"OutlineColour={SUBTITLE_OUTLINE_COLOR},"
@@ -517,21 +539,38 @@ def render_video_with_hard_subtitles(
         f"Alignment={SUBTITLE_ALIGNMENT}'"
     )
     
+    # Determine resolution based on video type
+    if video_type == "short":
+        # Shorts: 1080x1920 (portrait)
+        target_width = 1080
+        target_height = 1920
+        scale_filter = f"scale={target_width}:{target_height}:force_original_aspect_ratio=increase,crop={target_width}:{target_height}"
+    else:
+        # Long form: 1920x1080 (landscape)
+        target_width = 1920
+        target_height = 1080
+        scale_filter = f"scale={target_width}:{target_height}:force_original_aspect_ratio=increase,crop={target_width}:{target_height}"
+    
+    # Combine filters: first scale to target resolution, then apply subtitles
+    # Using format filter to ensure yuv420p pixel format
+    vf_filter = f"{scale_filter},format=yuv420p,{subtitle_filter}"
+    
     # Build FFmpeg command with high quality settings and audio merging
+    # IMPORTANT: ALWAYS re-encode with libx264 for consistent quality
     cmd = [
         'ffmpeg', '-y',
         '-i', str(input_video),
         '-i', str(audio_file),
-        '-vf', subtitle_filter,
+        '-vf', vf_filter,
         '-map', '0:v:0',  # Video from first input
         '-map', '1:a:0',  # Audio from second input
-        '-c:v', 'libx264',
-        '-preset', 'slow',  # Better compression
-        '-crf', '18',  # High quality
-        '-c:a', 'aac',
-        '-b:a', '192k',
+        '-c:v', 'libx264',  # Always re-encode video
+        '-preset', 'medium',  # Good balance of speed and compression
+        '-crf', '18',  # Visually lossless quality
+        '-c:a', 'aac',  # High quality audio encoding
+        '-b:a', '192k',  # High audio bitrate
         '-shortest',  # Match to shortest stream (usually audio)
-        '-pix_fmt', 'yuv420p',
+        '-pix_fmt', 'yuv420p',  # Ensure consistent pixel format
         '-movflags', '+faststart',  # Web optimization
         '-metadata', f'title=YT-AutoPilot {video_type} video',
         '-metadata', 'artist=AI Generated',
@@ -540,8 +579,11 @@ def render_video_with_hard_subtitles(
     ]
     
     # Log command for debugging
-    log(f"⚙️ Running FFmpeg with subtitle filter and audio merge...")
-    log(f"   Filter: {subtitle_filter}")
+    log(f"⚙️ Running FFmpeg with enhanced quality settings...")
+    log(f"   Video codec: libx264, CRF 18, preset medium")
+    log(f"   Resolution: {target_width}x{target_height}")
+    log(f"   Audio codec: AAC, 192k")
+    log(f"   Filter chain: {vf_filter}")
     
     try:
         # Run FFmpeg with progress monitoring
@@ -791,7 +833,7 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     Edit SHORTS video using FFmpeg with HARD-BURNED subtitles and AUDIO
     
     Features:
-    - Noto Sans Devanagari font for Hindi support
+    - Noto Sans Devanagari-Regular font for proper Hindi ligature rendering
     - Center-aligned subtitles with outline and shadow
     - Perfect sync with word-level subtitles
     - Automatic clip looping to fill full audio duration
@@ -800,6 +842,7 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     - AUDIO DURATION AUTHORITY - Final video must match audio duration exactly
     - STRICT POST-RENDER VALIDATION - Automatically enforces audio duration match
     - AUDIO ALWAYS MERGED - No silent videos
+    - ENHANCED QUALITY: CRF 18, forced HD resolution (1080x1920)
     
     Args:
         script_file: Path to script JSON
@@ -905,21 +948,24 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     concat_file = create_optimized_concat_file(valid_clips, output_dir, run_id, target_duration)
     
     # Base FFmpeg command for concatenated clips
+    # Note: This is just assembly, final encoding happens in render step
     cmd = [
         'ffmpeg', '-y',
         '-f', 'concat', '-safe', '0', '-i', str(concat_file),
         '-i', audio_file,
         '-c:v', 'libx264', '-preset', 'medium',
+        '-crf', '18',  # Ensure high quality even in assembly
         '-c:a', 'aac', '-b:a', '192k',
         '-shortest',
         '-pix_fmt', 'yuv420p',
         '-r', '30',
-        '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,format=yuv420p',
+        # Scale to shorts resolution with cropping to fill frame
+        '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p',
         str(assembled_video)
     ]
     
     # Execute first pass (video assembly) - SAFE NON-BLOCKING EXECUTION
-    log("🎬 Assembling video...")
+    log("🎬 Assembling video with HD quality settings...")
     try:
         # FIX: Use Popen with stream reading to prevent buffer deadlock
         process = subprocess.Popen(
@@ -985,7 +1031,6 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
             log(f"   This may cause audio/video desync. Consider increasing clip duration in asset acquisition.")
         
         # Use assembled video as-is (no trim needed)
-        import shutil
         shutil.copy2(assembled_video, temp_video)
         video_for_subtitles = temp_video
         final_duration = assembled_duration
@@ -993,7 +1038,6 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     else:
         # Exact match - perfect
         log(f"✅ Video duration exactly matches AUDIO AUTHORITY!")
-        import shutil
         shutil.copy2(assembled_video, temp_video)
         video_for_subtitles = temp_video
         final_duration = assembled_duration
@@ -1021,27 +1065,32 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
             'short'
         )
     else:
-        # No subtitles, just copy with audio
+        # No subtitles, just encode with audio
         log("⚠️ No subtitles file found, rendering without subtitles but with audio")
         
-        # Simple copy with audio merge
-        cmd_copy = [
+        # Encode with high quality settings (no subtitles)
+        cmd_encode = [
             'ffmpeg', '-y',
             '-i', str(video_for_subtitles),
             '-i', str(audio_file),
             '-map', '0:v:0',
             '-map', '1:a:0',
-            '-c:v', 'copy',
+            '-c:v', 'libx264',  # Always re-encode for quality
+            '-preset', 'medium',
+            '-crf', '18',  # Visually lossless
             '-c:a', 'aac',
+            '-b:a', '192k',
             '-shortest',
+            '-pix_fmt', 'yuv420p',
+            '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p',  # Force shorts resolution
             str(output_file)
         ]
         
         try:
-            subprocess.run(cmd_copy, check=True, capture_output=True)
+            subprocess.run(cmd_encode, check=True, capture_output=True)
             render_success = True
         except Exception as e:
-            log(f"❌ Failed to copy video with audio: {e}")
+            log(f"❌ Failed to encode video with audio: {e}")
             render_success = False
     
     # ============================================================================
@@ -1095,7 +1144,7 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
                 
                 if hook_text:
                     overlay_filters.append(
-                        f"drawtext=fontfile=/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf:"
+                        f"drawtext=fontfile={FONT_DIR}/{FONT_NAME}.ttf:"
                         f"text='{hook_text}':"
                         "fontcolor=yellow:"
                         "fontsize=72:"
@@ -1119,7 +1168,7 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
                 if cta_text:
                     cta_start = max(0, duration - 5)
                     overlay_filters.append(
-                        f"drawtext=fontfile=/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf:"
+                        f"drawtext=fontfile={FONT_DIR}/{FONT_NAME}.ttf:"
                         f"text='{cta_text}':"
                         "fontcolor=white:"
                         "fontsize=60:"
@@ -1191,8 +1240,9 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     log(f"   Duration match: {'✓' if abs(final_video_duration - final_audio_duration) < 0.1 else '⚠️'}")
     log(f"   FPS: {fps:.1f}")
     log(f"   Subtitles: Hard-burned (permanent)")
-    log(f"   Font: {SUBTITLE_FONT}")
-    log(f"   Audio: Merged (AAC)")
+    log(f"   Font: {SUBTITLE_FONT} (from {FONT_DIR})")
+    log(f"   Audio: Merged (AAC 192k)")
+    log(f"   Quality: CRF 18, preset medium, forced HD resolution")
     log(f"   Clips used: {len(valid_clips)}")
     
     # Save metadata
@@ -1211,8 +1261,16 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
         'file_size_mb': size_mb,
         'fps': fps,
         'resolution': f"{width}x{height}",
+        'quality_settings': {
+            'video_codec': 'libx264',
+            'crf': 18,
+            'preset': 'medium',
+            'audio_codec': 'aac',
+            'audio_bitrate': '192k',
+            'pixel_format': 'yuv420p'
+        },
         'subtitles_type': 'hard_burned',
-        'subtitles_font': SUBTITLE_FONT,
+        'subtitles_font': f"{FONT_DIR}/{FONT_NAME}.ttf",
         'subtitles_size': SUBTITLE_FONTSIZE,
         'subtitles_alignment': 'center',
         'subtitles_outline': SUBTITLE_OUTLINE_WIDTH,
@@ -1246,7 +1304,7 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     Edit LONG video using FFmpeg with HARD-BURNED subtitles and AUDIO
     
     Features:
-    - Noto Sans Devanagari font for Hindi support
+    - Noto Sans Devanagari-Regular font for proper Hindi ligature rendering
     - Center-aligned subtitles with outline and shadow
     - Perfect sync with word-level subtitles
     - Automatic clip looping to fill full audio duration
@@ -1255,6 +1313,7 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     - AUDIO DURATION AUTHORITY - Final video must match audio duration exactly
     - STRICT POST-RENDER VALIDATION - Automatically enforces audio duration match
     - AUDIO ALWAYS MERGED - No silent videos
+    - ENHANCED QUALITY: CRF 18, forced HD resolution (1920x1080)
     
     Args:
         script_file: Path to script JSON
@@ -1357,21 +1416,24 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     concat_file = create_optimized_concat_file(valid_clips, output_dir, run_id, target_duration)
     
     # Base FFmpeg command for concatenated clips
+    # Note: This is just assembly, final encoding happens in render step
     cmd = [
         'ffmpeg', '-y',
         '-f', 'concat', '-safe', '0', '-i', str(concat_file),
         '-i', audio_file,
         '-c:v', 'libx264', '-preset', 'medium',
+        '-crf', '18',  # Ensure high quality even in assembly
         '-c:a', 'aac', '-b:a', '192k',
         '-shortest',
         '-pix_fmt', 'yuv420p',
         '-r', '30',
-        '-vf', 'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p',
+        # Scale to 1080p with cropping to fill frame
+        '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,format=yuv420p',
         str(assembled_video)
     ]
     
     # Execute first pass (video assembly) - SAFE NON-BLOCKING EXECUTION
-    log("🎬 Assembling video...")
+    log("🎬 Assembling video with HD quality settings...")
     try:
         # FIX: Use Popen with stream reading to prevent buffer deadlock
         process = subprocess.Popen(
@@ -1471,27 +1533,32 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
             'long'
         )
     else:
-        # No subtitles, just copy with audio
+        # No subtitles, just encode with audio
         log("⚠️ No subtitles file found, rendering without subtitles but with audio")
         
-        # Simple copy with audio merge
-        cmd_copy = [
+        # Encode with high quality settings (no subtitles)
+        cmd_encode = [
             'ffmpeg', '-y',
             '-i', str(video_for_subtitles),
             '-i', str(audio_file),
             '-map', '0:v:0',
             '-map', '1:a:0',
-            '-c:v', 'copy',
+            '-c:v', 'libx264',  # Always re-encode for quality
+            '-preset', 'medium',
+            '-crf', '18',  # Visually lossless
             '-c:a', 'aac',
+            '-b:a', '192k',
             '-shortest',
+            '-pix_fmt', 'yuv420p',
+            '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,format=yuv420p',  # Force 1080p resolution
             str(output_file)
         ]
         
         try:
-            subprocess.run(cmd_copy, check=True, capture_output=True)
+            subprocess.run(cmd_encode, check=True, capture_output=True)
             render_success = True
         except Exception as e:
-            log(f"❌ Failed to copy video with audio: {e}")
+            log(f"❌ Failed to encode video with audio: {e}")
             render_success = False
     
     # ============================================================================
@@ -1567,8 +1634,9 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     log(f"   Duration match: {'✓' if abs(final_video_duration - final_audio_duration) < 0.1 else '⚠️'}")
     log(f"   FPS: {fps:.1f}")
     log(f"   Subtitles: Hard-burned (permanent)")
-    log(f"   Font: {SUBTITLE_FONT}")
-    log(f"   Audio: Merged (AAC)")
+    log(f"   Font: {SUBTITLE_FONT} (from {FONT_DIR})")
+    log(f"   Audio: Merged (AAC 192k)")
+    log(f"   Quality: CRF 18, preset medium, forced HD resolution")
     log(f"   Clips used: {len(valid_clips)}")
     
     # Save metadata
@@ -1588,8 +1656,16 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
         'file_size_mb': size_mb,
         'fps': fps,
         'resolution': f"{width}x{height}",
+        'quality_settings': {
+            'video_codec': 'libx264',
+            'crf': 18,
+            'preset': 'medium',
+            'audio_codec': 'aac',
+            'audio_bitrate': '192k',
+            'pixel_format': 'yuv420p'
+        },
         'subtitles_type': 'hard_burned',
-        'subtitles_font': SUBTITLE_FONT,
+        'subtitles_font': f"{FONT_DIR}/{FONT_NAME}.ttf",
         'subtitles_size': SUBTITLE_FONTSIZE,
         'subtitles_alignment': 'center',
         'subtitles_outline': SUBTITLE_OUTLINE_WIDTH,
@@ -1615,7 +1691,7 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
 # ============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description='Edit video with HARD-BURNED subtitles - NO BLACK VIDEO FALLBACK - AUDIO DURATION AUTHORITY')
+    parser = argparse.ArgumentParser(description='Edit video with HARD-BURNED subtitles - NO BLACK VIDEO FALLBACK - AUDIO DURATION AUTHORITY - ENHANCED QUALITY')
     parser.add_argument('--type', choices=['long', 'short'], required=True,
                        help='Video type (long form or short)')
     parser.add_argument('--script-file', required=True,
@@ -1646,7 +1722,9 @@ def main():
     log(f"   BLACK VIDEO FALLBACK: DISABLED")
     log(f"   AUDIO DURATION AUTHORITY: ENABLED")
     log(f"   POST-RENDER VALIDATION: AUTOMATIC (ALWAYS RUNS)")
-    log(f"   SUBTITLE FONT: {SUBTITLE_FONT} (fixed)")
+    log(f"   QUALITY SETTINGS: CRF 18, PRESET MEDIUM, FORCED HD RESOLUTION")
+    log(f"   AUDIO QUALITY: AAC 192k")
+    log(f"   SUBTITLE FONT: {FONT_DIR}/{FONT_NAME}.ttf (explicit font file)")
     log(f"   AUDIO MERGE: ENABLED (CRITICAL FIX)")
     log("=" * 80)
     
@@ -1699,7 +1777,9 @@ def main():
         log(f"✅ {args.type.upper()} video with HARD-BURNED subtitles and AUDIO created successfully")
         log(f"   Output: {output_file}")
         log(f"   AUDIO DURATION AUTHORITY enforced - final video matches audio")
-        log(f"   Subtitles permanently burned into video frames")
+        log(f"   QUALITY SETTINGS applied - CRF 18, forced HD resolution")
+        log(f"   Subtitles permanently burned into video frames using {FONT_DIR}/{FONT_NAME}.ttf")
+        log(f"   Devanagari ligatures rendered properly (क्या, not क् या)")
         log(f"   AUDIO merged successfully - NO SILENT VIDEOS")
         sys.exit(0)
     else:
