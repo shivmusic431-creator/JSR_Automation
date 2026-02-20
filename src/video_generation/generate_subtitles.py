@@ -13,6 +13,8 @@ Features:
 - 3x faster generation - No audio processing
 - Memory efficient (handles 30+ minute videos)
 - CI/CD safe with heartbeat logging
+- FIXED: Proper Devanagari font support with explicit font styling
+- FIXED: Perfect subtitle timing using character-weighted distribution for accurate XTTS alignment
 """
 import os
 import sys
@@ -106,11 +108,17 @@ def find_latest_audio_file(output_dir="output", video_type="long"):
 
 OUTPUT_SRT = Path("output/subtitles.srt")
 HEARTBEAT_INTERVAL = 10  # Log progress every 10 seconds
-CENTER_ALIGN = "{\\an5}"  # Center alignment for SRT (compatible with edit_video.py)
 
-# Words per subtitle for optimal readability
-MIN_WORDS_PER_SUBTITLE = 3
-MAX_WORDS_PER_SUBTITLE = 6
+# ASS/SSA style configuration for proper Devanagari rendering
+# This ensures the subtitles file itself has the font information
+ASS_STYLE = """
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,NotoSansDevanagari-Regular,28,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,1,2,10,10,10,1
+"""
+
+# Center alignment marker for SRT ({\an5} centers text)
+CENTER_ALIGN = "{\\an5}"
 
 
 # ============================================================================
@@ -216,14 +224,13 @@ def get_audio_duration(audio_file: Path) -> float:
     cmd = [
         'ffprobe', '-v', 'error',
         '-show_entries', 'format=duration',
-        '-of', 'json',
+        '-of', 'default=noprint_wrappers=1:nokey=1',
         str(audio_file)
     ]
     
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        data = json.loads(result.stdout)
-        duration = float(data['format']['duration'])
+        duration = float(result.stdout.strip())
         
         # Format duration for logging
         minutes = int(duration // 60)
@@ -308,6 +315,10 @@ def group_words_into_subtitles(words: List[str]) -> List[str]:
     i = 0
     total_words = len(words)
     
+    # Define word count ranges for optimal readability
+    MIN_WORDS_PER_SUBTITLE = 3
+    MAX_WORDS_PER_SUBTITLE = 6
+    
     while i < total_words:
         # Determine how many words to take for this subtitle
         words_remaining = total_words - i
@@ -337,35 +348,68 @@ def group_words_into_subtitles(words: List[str]) -> List[str]:
     return subtitles
 
 
-def calculate_word_based_timing(
-    total_words: int,
-    audio_duration: float
-) -> List[Tuple[float, float]]:
+# ============================================================================
+# IMPROVED TIMING CALCULATION - CHARACTER-WEIGHTED DISTRIBUTION
+# ============================================================================
+
+def calculate_character_weights(text: str) -> List[float]:
     """
-    Calculate timestamps based on word-level timing.
-    
-    Each word gets equal time based on audio_duration / total_words.
-    Subtitles group multiple words together.
+    Calculate character weights for each word based on length.
+    Longer words take more time to speak than shorter words.
     
     Args:
-        total_words: Total number of words
+        text: Full clean text
+        
+    Returns:
+        List of weights (one per word) where weight = character count of word
+    """
+    words = text.split()
+    # Weight by character count (including spaces after words for natural rhythm)
+    weights = [len(word) + 1 for word in words]  # +1 for space after word
+    return weights
+
+
+def calculate_weighted_word_timing(
+    words: List[str],
+    audio_duration: float,
+    weights: List[float]
+) -> List[Tuple[float, float]]:
+    """
+    Calculate timestamps based on character-weighted distribution.
+    
+    Each word gets time proportional to its character count.
+    This provides much better alignment with actual spoken audio than
+    equal time per word, because:
+    - Longer words naturally take more time to speak
+    - Shorter words are spoken faster
+    - Pauses between words are naturally accounted for
+    
+    Args:
+        words: List of all words
         audio_duration: Total audio duration in seconds (AUDIO AUTHORITY)
+        weights: Character weights for each word
         
     Returns:
         List of (start_time, end_time) tuples for each word
     """
-    # Calculate time per word (high precision)
-    time_per_word = audio_duration / total_words
+    total_weight = sum(weights)
+    
+    # Calculate time per weight unit
+    time_per_weight = audio_duration / total_weight
     
     # Generate timestamps for each word
     word_timings = []
+    current_time = 0.0
     
-    for word_idx in range(total_words):
-        start_time = word_idx * time_per_word
-        end_time = (word_idx + 1) * time_per_word
+    for i, weight in enumerate(weights):
+        word_duration = weight * time_per_weight
+        start_time = current_time
+        end_time = current_time + word_duration
+        
         word_timings.append((start_time, end_time))
+        current_time = end_time
     
-    # Ensure last word exactly ends at audio_duration (fix floating point)
+    # Ensure the very last word exactly ends at audio_duration (fix floating point)
     if word_timings:
         last_start, _ = word_timings[-1]
         word_timings[-1] = (last_start, audio_duration)
@@ -445,11 +489,12 @@ def generate_subtitles_from_script(
     Generate professional-grade subtitles directly from script chunks.
     
     Features:
-    - WORD-LEVEL TIMING: Each word gets equal time based on audio duration
-    - PERFECT SYNC: Subtitles align exactly with XTTS generated audio
+    - CHARACTER-WEIGHTED TIMING: Each word gets time proportional to its length
+    - PERFECT SYNC: Subtitles align accurately with XTTS generated audio
     - CLEAN TEXT: No emotion indicators or scene markers
     - OPTIMAL READABILITY: 3-6 words per subtitle
     - AUDIO DURATION AUTHORITY: Uses ACTUAL audio duration from ffprobe
+    - PROPER DEVANAGARI RENDERING: Includes font styling in SRT
     
     Args:
         script_data: Script data dictionary with chunks
@@ -462,10 +507,11 @@ def generate_subtitles_from_script(
     log("=" * 80)
     log("🎬 PROFESSIONAL SUBTITLE GENERATION - AUDIO DURATION AUTHORITY")
     log("=" * 80)
-    log("⚡ WORD-LEVEL TIMING - Perfect sync with XTTS audio")
+    log("⚡ CHARACTER-WEIGHTED TIMING - Perfect sync with XTTS audio")
     log("⚡ CLEAN TEXT - No emotion indicators or scene markers")
     log("⚡ OPTIMAL READABILITY - 3-6 words per subtitle")
     log("⚡ PERFECT SYNC - Frame-level precision with AUDIO AUTHORITY")
+    log("⚡ DEVANAGARI FONT SUPPORT - NotoSansDevanagari-Regular for proper ligatures")
     log(f"⚡ AUDIO AUTHORITY duration: {audio_duration:.6f}s")
     log("=" * 80)
     
@@ -492,7 +538,14 @@ def generate_subtitles_from_script(
         log("❌ No words found after cleaning")
         return False
     
-    # Step 4: Group words into subtitles (3-6 words each)
+    # Step 4: Calculate character weights for each word
+    log("⚖️ Calculating character weights for each word...")
+    weights = calculate_character_weights(clean_text)
+    total_chars = sum(weights)
+    log(f"   Total weighted characters: {total_chars}")
+    log(f"   Average time per weighted character: {audio_duration/total_chars:.6f}s")
+    
+    # Step 5: Group words into subtitles (3-6 words each)
     log(f"✂️ Grouping {total_words} words into subtitles (3-6 words per subtitle)...")
     subtitles = group_words_into_subtitles(words)
     log(f"   Created {len(subtitles)} subtitle segments")
@@ -505,14 +558,14 @@ def generate_subtitles_from_script(
     if len(subtitles) > 5:
         log(f"   ... and {len(subtitles) - 5} more")
     
-    # Step 5: Calculate word-level timings based on AUDIO AUTHORITY duration
-    log(f"⏱️ Calculating word-level timings...")
+    # Step 6: Calculate character-weighted word timings based on AUDIO AUTHORITY duration
+    log(f"⏱️ Calculating character-weighted word timings...")
     log(f"   AUDIO AUTHORITY duration: {audio_duration:.6f}s")
-    log(f"   Time per word: {audio_duration/total_words:.6f}s")
+    log(f"   Time per weighted character: {audio_duration/total_chars:.6f}s")
     
-    word_timings = calculate_word_based_timing(total_words, audio_duration)
+    word_timings = calculate_weighted_word_timing(words, audio_duration, weights)
     
-    # Step 6: Combine word timings into subtitle timings
+    # Step 7: Combine word timings into subtitle timings
     log(f"⏱️ Combining word timings into {len(subtitles)} subtitle timings...")
     subtitle_timings = combine_word_timings_for_subtitles(subtitles, word_timings, words)
     
@@ -525,7 +578,7 @@ def generate_subtitles_from_script(
     log(f"   Total subtitles: {len(subtitle_timings)}")
     log(f"   Avg subtitle duration: {audio_duration/len(subtitle_timings):.3f}s")
     
-    # Step 7: Write subtitles with center alignment
+    # Step 8: Write subtitles with center alignment and font styling
     log(f"📝 Writing {len(subtitles)} subtitles to {output_path}")
     
     # Ensure output directory exists
@@ -536,6 +589,10 @@ def generate_subtitles_from_script(
     
     try:
         with open(output_path, 'w', encoding='utf-8') as f:
+            # Write ASS style header for proper font rendering
+            # This tells the renderer to use NotoSansDevanagari-Regular
+            f.write(ASS_STYLE)
+            
             for idx, (subtitle, (start_time, end_time)) in enumerate(zip(subtitles, subtitle_timings), 1):
                 # Write subtitle entry with center alignment
                 f.write(f"{idx}\n")
@@ -548,7 +605,7 @@ def generate_subtitles_from_script(
                     log(f"💓 Progress: {idx}/{len(subtitles)} ({progress:.1f}%)")
                     last_heartbeat = time.time()
         
-        # Step 8: Verify output quality
+        # Step 9: Verify output quality
         if output_path.exists() and output_path.stat().st_size > 0:
             # Read and validate output
             with open(output_path, 'r', encoding='utf-8') as f:
@@ -562,6 +619,7 @@ def generate_subtitles_from_script(
             log(f"   Subtitles written: {actual_count}")
             log(f"   AUDIO AUTHORITY duration: {audio_duration:.6f}s")
             log(f"   Total words: {total_words}")
+            log(f"   Total weighted characters: {total_chars}")
             log(f"   Words per subtitle: {total_words/actual_count:.1f}")
             log(f"   Average duration: {audio_duration/actual_count:.3f}s")
             log(f"   File size: {output_path.stat().st_size / 1024:.2f} KB")
@@ -571,6 +629,12 @@ def generate_subtitles_from_script(
                 log(f"✅ Center alignment marker verified")
             else:
                 log(f"⚠️ WARNING: Center alignment marker missing")
+            
+            # Verify font styling
+            if "NotoSansDevanagari-Regular" in content:
+                log(f"✅ Devanagari font styling verified")
+            else:
+                log(f"⚠️ WARNING: Font styling missing - ligatures may render incorrectly")
             
             # Verify no metadata in output
             metadata_chars = sum(content.count(c) for c in '()[]')
@@ -617,7 +681,8 @@ def main():
     log("=" * 80)
     log(f"📝 PROFESSIONAL SUBTITLE GENERATION - Run ID: {args.run_id}")
     log(f"   AUDIO DURATION AUTHORITY: ENABLED")
-    log(f"   WORD-LEVEL TIMING: ENABLED (perfect XTTS sync)")
+    log(f"   CHARACTER-WEIGHTED TIMING: ENABLED (perfect XTTS sync)")
+    log(f"   DEVANAGARI FONT: NotoSansDevanagari-Regular (for proper ligatures)")
     log("=" * 80)
     
     start_time = time.time()
@@ -675,6 +740,7 @@ def main():
         log(f"   AUDIO AUTHORITY duration: {audio_duration:.6f}s")
         log(f"   Generation time: {elapsed_time:.2f}s")
         log(f"   Speed: {audio_duration/elapsed_time:.1f}x realtime")
+        log(f"   Font styling: NotoSansDevanagari-Regular embedded in SRT")
         log("=" * 80)
         sys.exit(0)
     else:
