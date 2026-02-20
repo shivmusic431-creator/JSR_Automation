@@ -12,7 +12,7 @@ FIXES:
 - Optimized for Coqui XTTS Hindi voice generation
 - Emotion indicators strictly on separate lines for XTTS metadata
 - SUPPORTS SEPARATE SHORTS SCRIPT GENERATION (not trimmed from long videos)
-- NEW: Gemini outputs scripts in pre-defined chunks (120-180 words each) - REDUCED SIZE TO PREVENT TRUNCATION
+- NEW: Gemini outputs scripts in pre-defined chunks (80-120 words each) - REDUCED SIZE FOR XTTS RELIABILITY
 - NEW: Complete sentences preserved across chunks
 - NEW: Zero word loss, zero overlap
 - NEW: PRODUCTION SAFETY - Chunk integrity validation stops pipeline on corruption
@@ -22,6 +22,7 @@ FIXES:
 - **FIXED: SHORT script normalization - ensures script_short.json always contains valid "chunks" array**
 - **FIXED: Unicode punctuation normalization - prevents validation failures from visually identical punctuation marks**
 - **CRITICAL FIX: full_script now rebuilt from chunks as authoritative source - pipeline no longer fails on word count mismatch**
+- **XTTS OPTIMIZATION: Chunk size reduced to 80-120 words for reliable Hindi synthesis**
 """
 import os
 import json
@@ -197,11 +198,11 @@ def create_long_script_prompt(category, sub_category, episode, title):
     XTTS optimization, and CRITICAL: DETERMINISTIC CHUNK GENERATION
     
     Gemini must output the script in pre-defined chunks:
-    - Each chunk: 120-180 words (STRICT LIMIT - reduced from 400-800 to prevent truncation)
+    - Each chunk: 80-120 words (REDUCED for XTTS Hindi reliability)
     - Complete sentences ONLY (never split mid-sentence)
     - No overlap, no gaps, no missing words
     - Chunks concatenate perfectly to form full script
-    - Total response size must remain under safe limits - prefer more chunks with smaller size
+    - Total response size must remain under safe limits
     """
     
     hindi_category = CATEGORIES_CONFIG.get(category, {}).get("hindi_name", category)
@@ -374,10 +375,11 @@ The script must sound:
 
 You MUST split the entire script into logical chunks following these RULES:
 
-1. **CHUNK SIZE RULE (STRICT LIMIT - PREVENTS TRUNCATION):** 
-   - Each chunk MUST contain between 120-180 Hindi words
-   - **NEVER exceed 180 words per chunk. This is a hard limit.**
-   - **Total response size must remain under safe limits. Prefer more chunks with smaller size.**
+1. **CHUNK SIZE RULE (OPTIMIZED FOR XTTS HINDI RELIABILITY):** 
+   - Each chunk MUST contain between 80-120 Hindi words
+   - **NEVER exceed 120 words per chunk. This is a hard limit.**
+   - Smaller chunks ensure reliable XTTS Hindi synthesis
+   - Total response size must remain under safe limits
 
 2. **SENTENCE COMPLETENESS RULE:** Each chunk MUST end with a COMPLETE sentence (। ? !)
 
@@ -388,13 +390,13 @@ You MUST split the entire script into logical chunks following these RULES:
 5. **WORD COUNT RULE:** Total words across ALL chunks = full script word count
 
 For a 10-15 minute script (1400-1900 words), you will create approximately:
-- 8-12 chunks (since each chunk is 120-180 words)
-- More chunks with smaller size ensures the JSON response stays under token limits
+- 14-20 chunks (since each chunk is 80-120 words)
+- More smaller chunks ensure XTTS generates complete audio
 
 **IMPORTANT CHUNKING GUIDELINES:**
-- Chunk 1: HOOK + beginning of PROBLEM AGITATION (120-180 words)
-- Middle chunks: Continue PROBLEM AGITATION, PROMISE, and MAIN CONTENT divided into small logical segments (120-180 words each)
-- Final chunks: PRACTICAL TIPS + CONCLUSION (120-180 words each)
+- Chunk 1: HOOK + beginning of PROBLEM AGITATION (80-120 words)
+- Middle chunks: Continue PROBLEM AGITATION, PROMISE, and MAIN CONTENT divided into small logical segments (80-120 words each)
+- Final chunks: PRACTICAL TIPS + CONCLUSION (80-120 words each)
 
 **CRITICAL OUTPUT INSTRUCTION:**
 You MUST return ONLY a valid JSON object. Do NOT include any explanation, preamble, or text before or after the JSON.
@@ -415,17 +417,17 @@ The JSON MUST have this EXACT structure:
   "chunks": [
     {{
       "chunk_id": 1,
-      "text": "Complete Hindi narration text for chunk 1 with emotional indicators like (गंभीर स्वर में) and scene markers [SCENE: type]. Must end with a complete sentence (। ? !). Word count: between 120-180 words."
+      "text": "Complete Hindi narration text for chunk 1 with emotional indicators like (गंभीर स्वर में) and scene markers [SCENE: type]. Must end with a complete sentence (। ? !). Word count: between 80-120 words."
     }},
     {{
       "chunk_id": 2,
-      "text": "Complete Hindi narration text for chunk 2 with emotional indicators and scene markers. Must start with the natural continuation from chunk 1. Must end with a complete sentence (। ? !). Word count: between 120-180 words."
+      "text": "Complete Hindi narration text for chunk 2 with emotional indicators and scene markers. Must start with the natural continuation from chunk 1. Must end with a complete sentence (। ? !). Word count: between 80-120 words."
     }},
     {{
       "chunk_id": 3,
-      "text": "Complete Hindi narration text for chunk 3 with emotional indicators and scene markers. Must start with the natural continuation from chunk 2. Must end with a complete sentence (। ? !). Word count: between 120-180 words."
+      "text": "Complete Hindi narration text for chunk 3 with emotional indicators and scene markers. Must start with the natural continuation from chunk 2. Must end with a complete sentence (। ? !). Word count: between 80-120 words."
     }}
-    // Add more chunks as needed (typically 8-12 total for 1400-1900 word script)
+    // Add more chunks as needed (typically 14-20 total for 1400-1900 word script)
   ],
   "full_script": "The COMPLETE concatenation of ALL chunks in order. This must be exactly chunk1.text + chunk2.text + chunk3.text + ... with no modifications.",
   "script": {{
@@ -440,14 +442,14 @@ The JSON MUST have this EXACT structure:
 - Verify that no sentence is split across chunks
 - Verify that total words in chunks = word_count in script
 - Verify that chunks cover 100% of the script content with no gaps
-- **Verify that NO chunk exceeds 180 words (this is a hard limit to prevent JSON truncation)**
+- **Verify that NO chunk exceeds 120 words (this is a hard limit to ensure XTTS Hindi reliability)**
 
 **ENSURE THE JSON IS COMPLETE AND VALID. DO NOT TRUNCATE ANY SECTION.**
 **REMEMBER: Pure Hindi (देवनागरी लिपि), NOT Hinglish**
 **REMEMBER: Emotional indicators must be on separate lines BEFORE sentences**
 **REMEMBER: Scene markers must be on separate lines, NOT spoken**
-**REMEMBER: CHUNKS MUST BE 120-180 WORDS EACH (STRICT LIMIT), COMPLETE SENTENCES ONLY**
-**REMEMBER: USING MORE SMALLER CHUNKS IS BETTER THAN FEWER LARGE CHUNKS TO PREVENT TRUNCATION**"""
+**REMEMBER: CHUNKS MUST BE 80-120 WORDS EACH (STRICT LIMIT), COMPLETE SENTENCES ONLY**
+**REMEMBER: USING MORE SMALLER CHUNKS IS BETTER FOR XTTS HINDI RELIABILITY**"""
     
     return prompt
 
@@ -1020,7 +1022,7 @@ def validate_chunks_integrity(script_data: dict) -> bool:
     4. Each chunk's text ends with a sentence terminator (। ? !) - ignoring trailing quotes
     5. Chunk IDs are sequential starting from 1 (1,2,3,... no gaps)
     6. (FIXED) full_script is rebuilt from chunks (chunks are authoritative)
-    7. (SOFT WARNING) Check if any chunk exceeds 180 words (new rule)
+    7. (WARNING) Check if any chunk exceeds 120 words (new XTTS reliability limit)
     
     Args:
         script_data: Parsed script JSON data
@@ -1122,10 +1124,10 @@ def validate_chunks_integrity(script_data: dict) -> bool:
         
         # Rule 7: Check chunk size (warning only, not fatal)
         word_count = len(text.split())
-        if word_count > 180:
-            print(f"⚠️ WARNING: Chunk {chunk_id} exceeds 180 words ({word_count} words). This may cause truncation in future runs.")
-        elif word_count < 120:
-            print(f"ℹ️ INFO: Chunk {chunk_id} is below 120 words ({word_count} words). Consider combining with adjacent chunk for optimal size.")
+        if word_count > 120:
+            print(f"⚠️ WARNING: Chunk {chunk_id} exceeds 120 words ({word_count} words). This may cause XTTS reliability issues.")
+        elif word_count < 80:
+            print(f"ℹ️ INFO: Chunk {chunk_id} is below 80 words ({word_count} words). Consider combining with adjacent chunk for optimal size.")
         
         # Add to concatenated text for rebuilding
         concatenated_text += text.strip()
@@ -1195,6 +1197,7 @@ def generate_script(category, sub_category, episode, run_id, video_type='long'):
     And production safety validation
     FIXED: Added response_mime_type="application/json" to force structured JSON output
     FIXED: Enhanced response handling to capture JSON from candidates when text field is empty
+    FIXED: XTTS-optimized chunk sizes (80-120 words)
     
     Args:
         category: Main category
@@ -1307,10 +1310,10 @@ def generate_script(category, sub_category, episode, run_id, video_type='long'):
                     'full_video_title': title
                 }
             
-            # Validate word count (shorts: 100-150 words)
+            # Validate word count (shorts: 80-150 words for XTTS reliability)
             word_count = script_data['script'].get('word_count', 0)
-            if word_count < 80 or word_count > 200:
-                print(f"⚠️ Shorts word count {word_count} outside optimal range (80-200)")
+            if word_count < 80 or word_count > 150:
+                print(f"⚠️ Shorts word count {word_count} outside optimal range (80-150)")
             
         else:  # long
             if 'metadata' not in script_data:
@@ -1372,12 +1375,17 @@ def generate_script(category, sub_category, episode, run_id, video_type='long'):
             'video_type': video_type,
             'generated_at': datetime.now().isoformat(),
             'model_used': model_used,
-            'response_length_chars': len(response_text)
+            'response_length_chars': len(response_text),
+            'xtts_optimization': {
+                'chunk_size_limit_words': 120,
+                'chunk_size_min_words': 80,
+                'sentence_completeness_enforced': True
+            }
         }
         
         # Add chunking info for long videos
         if video_type == 'long' and 'chunks' in script_data:
-            script_data['generation_info']['chunking_method'] = 'gemini_deterministic_chunking'
+            script_data['generation_info']['chunking_method'] = 'gemini_deterministic_chunking_xtts_optimized'
             script_data['generation_info']['num_chunks'] = len(script_data['chunks'])
         
         # Save to file based on video type
