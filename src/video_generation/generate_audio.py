@@ -5,7 +5,7 @@ Production-grade pause-aware, resumable audio generation system
 
 Features:
 - Intelligent pause-aware chunking (~2 min chunks)
-- XTTS v2-safe micro-segmentation (FIXED: 600 chars max per segment)
+- XTTS v2-safe micro-segmentation (FIXED: 250 chars max per segment for Hindi)
 - Resume-safe persistent session state
 - Automatic retry logic (3 attempts per chunk)
 - CLI modes: generate, resume, stitch, status, chunk-id
@@ -20,6 +20,9 @@ Features:
 - **FIX: Direct chunk loading from Gemini output - NO ScriptChunker used**
 - **FIX: 100% deterministic chunk boundaries from script.json**
 - **FIX: Safe session state update using chunk_id search instead of direct indexing**
+- **FIX: XTTS reliability - 250 char max segments with validation**
+- **FIX: Audio verification - prevents silent failures and incomplete narration**
+- **FIX: Session isolation - separate files for long and short scripts**
 
 ARCHITECTURE:
 - Single model load per process (XTTS v2 optimization)
@@ -117,17 +120,20 @@ MAX_CHUNK_DURATION = 75       # HARD CAP - NEVER EXCEED
 # 180 WPM provides confident, energetic pacing while maintaining clarity
 WORDS_PER_MINUTE = 180        # YouTube-optimized speaking rate for Hindi
 
-# FIX 2: OPTIMIZED micro-segment size for better voice continuity
+# FIX 2: CRITICAL FIX - SAFE SEGMENT SIZE LIMIT FOR HINDI XTTS
 # XTTS v2 has a hard limit of 400 tokens per generation
-# 600 characters is a safe upper bound that respects this limit
-# Keeping segments as complete sentences improves voice confidence
-XTTS_MICRO_SEGMENT_CHARS = 600
+# Hindi text requires smaller segments due to complex phonetic processing
+# 250 characters ensures safe synthesis for Hindi with no silent failures
+XTTS_MICRO_SEGMENT_CHARS = 250  # REDUCED FROM 600 FOR RELIABILITY
 MAX_RETRIES = 3
 
 # XTTS Configuration
 XTTS_MODEL_NAME = "tts_models/multilingual/multi-dataset/xtts_v2"
 XTTS_SAMPLE_RATE = 24000  # XTTS v2 native sample rate
 XTTS_LANGUAGE = "hi"  # Hindi language code
+
+# Minimum file size validation (5KB ensures non-empty audio)
+MIN_AUDIO_FILE_SIZE = 5000  # bytes
 
 # FIX 3: OPTIMIZED SPEED for final audio (applied after stitching)
 # 1.20x provides confident, energetic pacing while maintaining:
@@ -150,7 +156,9 @@ MEMORY_CHECK_INTERVAL = 5  # Check memory every N micro-segments
 # Directories
 OUTPUT_DIR = Path('output')
 CHUNKS_DIR = OUTPUT_DIR / 'audio_chunks'
-SESSION_FILE = CHUNKS_DIR / 'session.json'
+# FIX 4: SEPARATE SESSION FILES FOR LONG AND SHORT SCRIPTS
+SESSION_FILE_LONG = CHUNKS_DIR / 'session_long.json'
+SESSION_FILE_SHORT = CHUNKS_DIR / 'session_short.json'
 FINAL_AUDIO_FILE_LONG = OUTPUT_DIR / 'audio_long.wav'
 FINAL_AUDIO_FILE_SHORT = OUTPUT_DIR / 'audio_short.wav'
 
@@ -380,6 +388,7 @@ def increase_audio_speed(audio: np.ndarray, speed: float = FINAL_SPEED_MULTIPLIE
 class SessionManager:
     """
     Persistent session state management for resume capability
+    FIXED: Uses separate session files for long and short scripts
     """
     
     def __init__(self, run_id: str, script_file: str, script_type: str = 'long'):
@@ -390,11 +399,17 @@ class SessionManager:
         
         CHUNKS_DIR.mkdir(parents=True, exist_ok=True)
     
+    def _get_session_file(self) -> Path:
+        """Get session file path based on script type"""
+        return CHUNKS_DIR / f"session_{self.script_type}.json"
+    
     def load_or_create_session(self, chunks: List[ChunkMetadata], voice_preset: str) -> SessionState:
         """Load existing session or create new one"""
-        if SESSION_FILE.exists():
-            log("📂 Loading existing session...")
-            with open(SESSION_FILE, 'r', encoding='utf-8') as f:
+        session_file = self._get_session_file()
+        
+        if session_file.exists():
+            log(f"📂 Loading existing session for {self.script_type}...")
+            with open(session_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
             # Check if run_id AND script_type match
@@ -474,7 +489,8 @@ class SessionManager:
     
     def _save_session(self):
         """Save session to disk"""
-        with open(SESSION_FILE, 'w', encoding='utf-8') as f:
+        session_file = self._get_session_file()
+        with open(session_file, 'w', encoding='utf-8') as f:
             json.dump(self.session.to_dict(), f, ensure_ascii=False, indent=2)
 
 
@@ -494,8 +510,10 @@ class XTTSAudioGenerator:
     - Memory cleanup after each chunk
     - Always uses voice cloning with my_voice.wav
     - Applies audio smoothing to prevent cracking
-    - Micro-segments capped at 600 chars to prevent XTTS token limit crash
-    - FIX 4: Generates clean, silence-trimmed chunks WITHOUT speed increase
+    - FIX 5: Micro-segments capped at 250 chars to prevent XTTS token limit crash
+    - FIX 6: Segment verification ensures no silent failures
+    - FIX 7: Complete segment validation before merging
+    - Generates clean, silence-trimmed chunks WITHOUT speed increase
     - Speed increase applied globally after stitching for consistent pacing
     - Optimized segment boundaries for confident voice delivery
     """
@@ -547,8 +565,9 @@ class XTTSAudioGenerator:
         """
         Generate audio for a chunk with CI-safe retry logic
         
-        FIX 5: Generates clean audio with silence trimming only.
+        FIX: Generates clean audio with silence trimming only.
         NO SPEED INCREASE at chunk level - applied globally after stitching.
+        Includes comprehensive validation to prevent silent failures.
         
         Args:
             chunk: Chunk metadata
@@ -577,7 +596,7 @@ class XTTSAudioGenerator:
                 if audio_array is not None:
                     log(f"✅ Generation successful on attempt {attempt + 1}")
                     
-                    # FIX 6: Professional audio processing chain for chunks
+                    # FIX: Professional audio processing chain for chunks
                     # 1. Trim excessive silence only (preserves natural pacing)
                     # 2. NO speed increase at chunk level
                     # 3. Light smoothing for quality
@@ -608,8 +627,9 @@ class XTTSAudioGenerator:
         """
         Generate audio with continuous heartbeat logging
         
-        Split into larger micro-segments (600 chars max) while preserving sentence boundaries.
-        Larger segments improve voice continuity and confidence.
+        Split into micro-segments (250 chars max) while preserving sentence boundaries.
+        Smaller segments improve XTTS reliability for Hindi synthesis.
+        Includes comprehensive validation at every step.
         
         Args:
             text: Clean text to synthesize
@@ -618,11 +638,13 @@ class XTTSAudioGenerator:
         Returns:
             Audio array or None
         """
-        # Split into micro-segments (600 chars max) preserving sentences
+        # Split into micro-segments (250 chars max) preserving sentences
         segments = self._split_into_micro_segments(text)
         log(f"📝 Split into {len(segments)} micro-segments (max {XTTS_MICRO_SEGMENT_CHARS} chars each)")
         
         self.heartbeat.start(f"Generating chunk {chunk_id} (0/{len(segments)} segments)")
+        
+        generated_files = []
         
         try:
             audio_arrays = []
@@ -637,11 +659,11 @@ class XTTSAudioGenerator:
                 
                 log(f"  🔊 Segment {i+1}/{len(segments)}: {len(segment)} chars")
                 
+                # Generate audio to file first (more stable than direct array)
+                temp_file = CHUNKS_DIR / f"temp_seg_{chunk_id}_{i}.wav"
+                
                 # Always use voice cloning with speaker_wav parameter
                 try:
-                    # Generate audio to file first (more stable than direct array)
-                    temp_file = CHUNKS_DIR / f"temp_seg_{chunk_id}_{i}.wav"
-                    
                     self.tts.tts_to_file(
                         text=segment,
                         speaker_wav=VOICE_CLONE_FILE,
@@ -649,17 +671,35 @@ class XTTSAudioGenerator:
                         file_path=str(temp_file)
                     )
                     
+                    # ===== FIX: AUDIO SEGMENT VERIFICATION =====
+                    # Immediately validate that file was created and has content
+                    if not temp_file.exists():
+                        error_msg = f"XTTS failed: segment file missing for chunk {chunk_id}, segment {i+1}"
+                        log(f"❌ {error_msg}")
+                        raise RuntimeError(error_msg)
+                    
+                    # Check file size - ensure it's not empty/incomplete
+                    file_size = os.path.getsize(temp_file)
+                    if file_size < MIN_AUDIO_FILE_SIZE:
+                        error_msg = (f"XTTS failed: segment file too small ({file_size} bytes), "
+                                    f"likely incomplete for chunk {chunk_id}, segment {i+1}")
+                        log(f"❌ {error_msg}")
+                        raise RuntimeError(error_msg)
+                    
+                    log(f"  ✓ Segment {i+1} file validated: {file_size} bytes")
+                    
                     # Read the generated audio
                     rate, wav = read_wav(temp_file)
                     
-                    # Clean up temp file
-                    temp_file.unlink(missing_ok=True)
+                    # Add to list of generated files for later validation
+                    generated_files.append(temp_file)
                     
                 except Exception as e:
                     log(f"⚠️ Generation failed: {e}")
                     
                     # Fallback to direct array generation if file method fails
                     try:
+                        log(f"  ⚠️ Trying fallback generation for segment {i+1}")
                         wav_list = self.tts.tts(
                             text=segment,
                             speaker_wav=VOICE_CLONE_FILE,
@@ -671,6 +711,14 @@ class XTTSAudioGenerator:
                         else:
                             wav = wav_list
                             
+                        # Verify we got audio data
+                        if len(wav) == 0:
+                            error_msg = f"Fallback generated empty audio for chunk {chunk_id}, segment {i+1}"
+                            log(f"❌ {error_msg}")
+                            raise RuntimeError(error_msg)
+                            
+                        log(f"  ✓ Fallback generated {len(wav)} samples")
+                        
                     except Exception as e2:
                         log(f"❌ Fallback also failed: {e2}")
                         raise
@@ -705,11 +753,25 @@ class XTTSAudioGenerator:
                     log(f"  🧹 Memory cleanup after {i+1} segments")
                     memory_cleanup()
             
-            # Concatenate audio chunks
+            # ===== FIX: ENSURE ALL SEGMENTS WERE GENERATED =====
+            if len(audio_arrays) != len(segments):
+                error_msg = (f"Incomplete audio generation: expected {len(segments)} segments, "
+                            f"got {len(audio_arrays)} segments")
+                log(f"❌ {error_msg}")
+                raise RuntimeError(error_msg)
+            
             log(f"🔗 Concatenating {len(audio_arrays)} segments...")
             final_audio = np.concatenate(audio_arrays, axis=0)
             
             memory_cleanup()
+            
+            # Clean up temp files
+            for temp_file in generated_files:
+                try:
+                    temp_file.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            
             return final_audio
             
         except Exception as e:
@@ -724,17 +786,17 @@ class XTTSAudioGenerator:
         """
         Split text into XTTS-safe micro-segments
         
-        Optimized for voice confidence:
+        Optimized for voice confidence and reliability:
         - Prefers complete sentences
         - Avoids fragmentation
         - Maintains natural speech flow
-        - 600 chars max per segment (XTTS v2 safe limit)
+        - 250 chars max per segment (safe limit for Hindi XTTS)
         
         Args:
             text: Text to split
             
         Returns:
-            List of segments (each <= 600 chars)
+            List of segments (each <= 250 chars)
         """
         # Split on Hindi/Devanagari sentence boundaries
         # । - Hindi danda (full stop)
@@ -788,7 +850,7 @@ class AudioStitcher:
         """
         Stitch chunk WAV files into single output with global speed optimization
         
-        FIX 7: CORRECT PIPELINE ORDER:
+        FIX: CORRECT PIPELINE ORDER:
         1. Load all chunks (already silence-trimmed)
         2. Concatenate with no gaps
         3. Apply global speed increase once for consistent pacing
@@ -827,6 +889,11 @@ class AudioStitcher:
             if not wav_path.exists():
                 log(f"⚠️ Chunk {chunk.chunk_id} WAV not found: {wav_path}")
                 continue
+            
+            # Validate chunk file size before loading
+            file_size = os.path.getsize(wav_path)
+            if file_size < MIN_AUDIO_FILE_SIZE:
+                log(f"⚠️ Chunk {chunk.chunk_id} file suspiciously small: {file_size} bytes")
             
             rate, audio = read_wav(wav_path)
             chunk_duration = len(audio) / rate
@@ -1056,7 +1123,7 @@ class AudioGenerationOrchestrator:
         
         log(f"\n✅ Chunk preparation complete for {self.script_type}!")
         log(f"   Total chunks: {len(self.chunks)}")
-        log(f"   Session saved to: {SESSION_FILE}")
+        log(f"   Session saved to: {self.session_manager._get_session_file()}")
         
         return True
     
@@ -1077,9 +1144,10 @@ class AudioGenerationOrchestrator:
         log("=" * 80)
         
         # Load chunks
-        if resume and SESSION_FILE.exists():
+        session_file = CHUNKS_DIR / f"session_{self.script_type}.json"
+        if resume and session_file.exists():
             log("📂 Resuming from existing session...")
-            with open(SESSION_FILE, 'r', encoding='utf-8') as f:
+            with open(session_file, 'r', encoding='utf-8') as f:
                 session_data = json.load(f)
             
             # Verify script type matches
@@ -1142,11 +1210,12 @@ class AudioGenerationOrchestrator:
         log(f"JOB B: SINGLE CHUNK GENERATION ({self.script_type.upper()} ID: {chunk_id})")
         log("=" * 80)
         
-        if not SESSION_FILE.exists():
+        session_file = CHUNKS_DIR / f"session_{self.script_type}.json"
+        if not session_file.exists():
             log("❌ No session found - run JOB A first (--prepare)")
             return False
         
-        with open(SESSION_FILE, 'r', encoding='utf-8') as f:
+        with open(session_file, 'r', encoding='utf-8') as f:
             session_data = json.load(f)
         
         # Verify script type matches
@@ -1215,6 +1284,16 @@ class AudioGenerationOrchestrator:
             # Enforce XTTS sample rate
             write_wav(str(wav_path), XTTS_SAMPLE_RATE, audio_array)
             
+            # Final validation of written file
+            if not wav_path.exists():
+                log(f"❌ Failed to write chunk {chunk.chunk_id} to disk")
+                return False
+            
+            file_size = os.path.getsize(wav_path)
+            if file_size < MIN_AUDIO_FILE_SIZE:
+                log(f"❌ Chunk {chunk.chunk_id} file too small: {file_size} bytes")
+                return False
+            
             chunk.status = ChunkStatus.COMPLETED.value
             chunk.wav_path = str(wav_path)
             chunk.error = None
@@ -1222,7 +1301,7 @@ class AudioGenerationOrchestrator:
             actual_duration = len(audio_array) / XTTS_SAMPLE_RATE
             log(f"✅ Completed in {generation_time:.1f}s")
             log(f"   Chunk duration (pre-stitch): {actual_duration:.1f}s")
-            log(f"   File: {wav_path.name}")
+            log(f"   File: {wav_path.name} ({file_size} bytes)")
             
             self.session_manager.update_chunk_status(chunk)
             return True
@@ -1247,11 +1326,12 @@ class AudioGenerationOrchestrator:
         log(f"JOB C: AUDIO STITCHING WITH GLOBAL SPEED OPTIMIZATION ({self.script_type.upper()})")
         log("=" * 80)
         
-        if not SESSION_FILE.exists():
+        session_file = CHUNKS_DIR / f"session_{self.script_type}.json"
+        if not session_file.exists():
             log("❌ No session found - cannot stitch")
             return False
         
-        with open(SESSION_FILE, 'r', encoding='utf-8') as f:
+        with open(session_file, 'r', encoding='utf-8') as f:
             session_data = json.load(f)
         
         # Verify script type matches
@@ -1279,21 +1359,33 @@ class AudioGenerationOrchestrator:
     
     def print_status(self):
         """Print current session status"""
-        if not SESSION_FILE.exists():
-            log("ℹ️ No session found")
+        session_file_long = CHUNKS_DIR / 'session_long.json'
+        session_file_short = CHUNKS_DIR / 'session_short.json'
+        
+        if not session_file_long.exists() and not session_file_short.exists():
+            log("ℹ️ No sessions found")
             return
         
-        with open(SESSION_FILE, 'r', encoding='utf-8') as f:
-            session_data = json.load(f)
+        # Print long session if exists
+        if session_file_long.exists():
+            with open(session_file_long, 'r', encoding='utf-8') as f:
+                session_data = json.load(f)
+            self._print_session_status(session_data, "LONG")
         
-        script_type = session_data.get('script_type', 'unknown')
-        
+        # Print short session if exists
+        if session_file_short.exists():
+            with open(session_file_short, 'r', encoding='utf-8') as f:
+                session_data = json.load(f)
+            self._print_session_status(session_data, "SHORT")
+    
+    def _print_session_status(self, session_data: Dict, session_type: str):
+        """Print status for a specific session"""
         log("\n" + "=" * 80)
-        log(f"📊 SESSION STATUS ({script_type.upper()})")
+        log(f"📊 SESSION STATUS ({session_type})")
         log("=" * 80)
         log(f"Run ID: {session_data['run_id']}")
         log(f"Script: {session_data['script_file']}")
-        log(f"Script Type: {script_type}")
+        log(f"Script Type: {session_data.get('script_type', 'unknown')}")
         log(f"Created: {session_data['created_at']}")
         log(f"Updated: {session_data['updated_at']}")
         log(f"\nProgress: {session_data['chunks_completed']}/{session_data['total_chunks']} completed")
@@ -1312,7 +1404,8 @@ class AudioGenerationOrchestrator:
                 f"({chunk['estimated_duration']:.1f}s, retries: {chunk['retries']})")
             
             if chunk.get('wav_path') and Path(chunk['wav_path']).exists():
-                log(f"      WAV: {chunk['wav_path']}")
+                file_size = os.path.getsize(chunk['wav_path'])
+                log(f"      WAV: {chunk['wav_path']} ({file_size} bytes)")
         
         log("=" * 80 + "\n")
     
@@ -1345,7 +1438,14 @@ class AudioGenerationOrchestrator:
                 'global_speed_multiplier': FINAL_SPEED_MULTIPLIER,
                 'chunk_level_speed_disabled': True,
                 'voice_confidence_optimized': True,
-                'safe_session_update': True  # Added to track this fix
+                'safe_session_update': True,
+                'xtts_reliability_fixes': {
+                    'max_segment_chars': XTTS_MICRO_SEGMENT_CHARS,
+                    'min_audio_file_size': MIN_AUDIO_FILE_SIZE,
+                    'segment_verification': True,
+                    'complete_segment_validation': True,
+                    'separate_session_files': True
+                }
             }
         }
         
