@@ -7,6 +7,7 @@ ABSOLUTELY NO BLACK VIDEO GENERATION - Fails safely if requirements not met
 AUDIO DURATION AUTHORITY - Final video duration must match audio duration exactly
 STRICT POST-RENDER VALIDATION - Automatically enforces audio duration match
 FIXED: Subtitles are now properly burned into video using subtitles filter
+FIXED: Audio is now properly merged into final videos (CRITICAL BUG FIX)
 """
 import os
 import json
@@ -458,20 +459,22 @@ def get_video_metadata(video_path: Path) -> tuple:
 
 
 # ============================================================================
-# FIXED VIDEO RENDERING WITH HARD SUBTITLES
+# FIXED VIDEO RENDERING WITH HARD SUBTITLES AND AUDIO
 # ============================================================================
 
 def render_video_with_hard_subtitles(
     input_video: Path,
     output_video: Path,
     subtitles_srt: Path,
+    audio_file: str,
     video_duration: float,
     video_type: str = "long"
 ) -> bool:
     """
-    Render final video with hard-burned subtitles using FFmpeg.
+    Render final video with hard-burned subtitles and audio using FFmpeg.
     
     Uses the subtitles filter to permanently burn subtitles into video frames.
+    Merges audio from the provided audio file.
     Always uses Noto Sans Devanagari font for Hindi support.
     Subtitles are center-aligned with outline and shadow for readability.
     
@@ -479,19 +482,26 @@ def render_video_with_hard_subtitles(
         input_video: Path to input video
         output_video: Path to output video
         subtitles_srt: Path to SRT subtitles file
+        audio_file: Path to audio file to merge
         video_duration: Duration of video in seconds (for progress tracking)
         video_type: Type of video ('long' or 'short') - used for logging only
         
     Returns:
         True if successful
     """
-    log(f"🎥 Rendering video with hard-burned subtitles...")
+    log(f"🎥 Rendering video with hard-burned subtitles and audio...")
     log(f"   Subtitle file: {subtitles_srt}")
+    log(f"   Audio file: {audio_file}")
     log(f"   Font: {SUBTITLE_FONT}, Size: {SUBTITLE_FONTSIZE}")
     
     # Verify subtitle file exists
     if not subtitles_srt.exists():
         log(f"❌ Subtitle file not found: {subtitles_srt}")
+        return False
+    
+    # Verify audio file exists
+    if not Path(audio_file).exists():
+        log(f"❌ Audio file not found: {audio_file}")
         return False
     
     # Create subtitle filter string with proper escaping
@@ -507,17 +517,21 @@ def render_video_with_hard_subtitles(
         f"Alignment={SUBTITLE_ALIGNMENT}'"
     )
     
-    # Build FFmpeg command with high quality settings
+    # Build FFmpeg command with high quality settings and audio merging
     cmd = [
         'ffmpeg', '-y',
         '-i', str(input_video),
+        '-i', str(audio_file),
         '-vf', subtitle_filter,
+        '-map', '0:v:0',  # Video from first input
+        '-map', '1:a:0',  # Audio from second input
         '-c:v', 'libx264',
         '-preset', 'slow',  # Better compression
         '-crf', '18',  # High quality
-        '-pix_fmt', 'yuv420p',
         '-c:a', 'aac',
         '-b:a', '192k',
+        '-shortest',  # Match to shortest stream (usually audio)
+        '-pix_fmt', 'yuv420p',
         '-movflags', '+faststart',  # Web optimization
         '-metadata', f'title=YT-AutoPilot {video_type} video',
         '-metadata', 'artist=AI Generated',
@@ -526,7 +540,7 @@ def render_video_with_hard_subtitles(
     ]
     
     # Log command for debugging
-    log(f"⚙️ Running FFmpeg with subtitle filter...")
+    log(f"⚙️ Running FFmpeg with subtitle filter and audio merge...")
     log(f"   Filter: {subtitle_filter}")
     
     try:
@@ -563,10 +577,9 @@ def render_video_with_hard_subtitles(
         if returncode == 0:
             if output_video.exists() and output_video.stat().st_size > 0:
                 size_mb = output_video.stat().st_size / (1024 * 1024)
-                log(f"✅ Video rendered successfully with hard subtitles: {size_mb:.2f} MB")
+                log(f"✅ Video rendered successfully with hard subtitles and audio: {size_mb:.2f} MB")
                 
-                # Quick verification that subtitles were applied
-                # Check if file is valid
+                # Quick verification that file is valid
                 probe_cmd = [
                     'ffprobe', '-v', 'error',
                     '-show_entries', 'stream=codec_type',
@@ -767,7 +780,7 @@ def verify_manifest_integrity(manifest_path: Path, clips_path: Path) -> tuple:
 
 
 # ============================================================================
-# ENHANCED SHORTS VIDEO EDITING WITH HARD SUBTITLES - NO BLACK FALLBACK
+# ENHANCED SHORTS VIDEO EDITING WITH HARD SUBTITLES AND AUDIO - NO BLACK FALLBACK
 # ============================================================================
 
 def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str, 
@@ -775,7 +788,7 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
                       hook_file: str = None, cta_file: str = None,
                       premium_subtitles: bool = True):
     """
-    Edit SHORTS video using FFmpeg with HARD-BURNED subtitles
+    Edit SHORTS video using FFmpeg with HARD-BURNED subtitles and AUDIO
     
     Features:
     - Noto Sans Devanagari font for Hindi support
@@ -786,6 +799,7 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     - ABSOLUTELY NO BLACK VIDEO - Fails safely if requirements not met
     - AUDIO DURATION AUTHORITY - Final video must match audio duration exactly
     - STRICT POST-RENDER VALIDATION - Automatically enforces audio duration match
+    - AUDIO ALWAYS MERGED - No silent videos
     
     Args:
         script_file: Path to script JSON
@@ -801,7 +815,7 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
         Path to output video file or None if failed
     """
     
-    log(f"🎬 Editing SHORTS video with HARD-BURNED subtitles...")
+    log(f"🎬 Editing SHORTS video with HARD-BURNED subtitles and AUDIO...")
     log(f"   Run ID: {run_id}")
     
     # Setup paths
@@ -895,7 +909,6 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
         'ffmpeg', '-y',
         '-f', 'concat', '-safe', '0', '-i', str(concat_file),
         '-i', audio_file,
-        '-t', str(max_duration),
         '-c:v', 'libx264', '-preset', 'medium',
         '-c:a', 'aac', '-b:a', '192k',
         '-shortest',
@@ -989,7 +1002,7 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     width, height, duration, is_short, fps = get_video_metadata(video_for_subtitles)
     log(f"📹 Video metadata: {width}x{height}, {duration:.1f}s, {fps:.1f}fps")
     
-    # Render final video with HARD-BURNED subtitles
+    # Render final video with HARD-BURNED subtitles and AUDIO
     render_success = False
     
     # Always burn subtitles if SRT file exists
@@ -998,19 +1011,38 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
         subtitles_srt_path = Path(subtitles_file)
         log(f"📝 Found subtitles file: {subtitles_srt_path}")
         
-        # Render with hard-burned subtitles
+        # Render with hard-burned subtitles and audio
         render_success = render_video_with_hard_subtitles(
             video_for_subtitles,
             output_file,
             subtitles_srt_path,
+            audio_file,  # Pass audio file for merging
             duration,
             'short'
         )
     else:
-        # No subtitles, just copy
-        log("⚠️ No subtitles file found, rendering without subtitles")
-        shutil.copy2(video_for_subtitles, output_file)
-        render_success = True
+        # No subtitles, just copy with audio
+        log("⚠️ No subtitles file found, rendering without subtitles but with audio")
+        
+        # Simple copy with audio merge
+        cmd_copy = [
+            'ffmpeg', '-y',
+            '-i', str(video_for_subtitles),
+            '-i', str(audio_file),
+            '-map', '0:v:0',
+            '-map', '1:a:0',
+            '-c:v', 'copy',
+            '-c:a', 'aac',
+            '-shortest',
+            str(output_file)
+        ]
+        
+        try:
+            subprocess.run(cmd_copy, check=True, capture_output=True)
+            render_success = True
+        except Exception as e:
+            log(f"❌ Failed to copy video with audio: {e}")
+            render_success = False
     
     # ============================================================================
     # CRITICAL: POST-RENDER VALIDATION - SILENT FAILURES MUST BE IMPOSSIBLE
@@ -1151,7 +1183,7 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     final_video_duration = get_video_duration(output_file)
     
     size_mb = output_file.stat().st_size / (1024 * 1024)
-    log(f"✅ SHORTS video with HARD-BURNED subtitles complete")
+    log(f"✅ SHORTS video with HARD-BURNED subtitles and AUDIO complete")
     log(f"   Output: {output_file}")
     log(f"   Size: {size_mb:.2f} MB")
     log(f"   Final video duration: {final_video_duration:.1f}s")
@@ -1160,6 +1192,7 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     log(f"   FPS: {fps:.1f}")
     log(f"   Subtitles: Hard-burned (permanent)")
     log(f"   Font: {SUBTITLE_FONT}")
+    log(f"   Audio: Merged (AAC)")
     log(f"   Clips used: {len(valid_clips)}")
     
     # Save metadata
@@ -1184,6 +1217,8 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
         'subtitles_alignment': 'center',
         'subtitles_outline': SUBTITLE_OUTLINE_WIDTH,
         'subtitles_shadow': SUBTITLE_SHADOW,
+        'audio_included': True,
+        'audio_codec': 'AAC',
         'hook_included': hook_file and Path(hook_file).exists(),
         'cta_included': cta_file and Path(cta_file).exists(),
         'clips_validated': len(valid_clips),
@@ -1201,14 +1236,14 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
 
 
 # ============================================================================
-# ENHANCED LONG VIDEO EDITING WITH HARD SUBTITLES - NO BLACK FALLBACK
+# ENHANCED LONG VIDEO EDITING WITH HARD SUBTITLES AND AUDIO - NO BLACK FALLBACK
 # ============================================================================
 
 def edit_long_video(script_file: str, audio_file: str, clips_dir: str, 
                     run_id: str, subtitles_file: str = None,
                     premium_subtitles: bool = True):
     """
-    Edit LONG video using FFmpeg with HARD-BURNED subtitles
+    Edit LONG video using FFmpeg with HARD-BURNED subtitles and AUDIO
     
     Features:
     - Noto Sans Devanagari font for Hindi support
@@ -1219,6 +1254,7 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     - ABSOLUTELY NO BLACK VIDEO - Fails safely if requirements not met
     - AUDIO DURATION AUTHORITY - Final video must match audio duration exactly
     - STRICT POST-RENDER VALIDATION - Automatically enforces audio duration match
+    - AUDIO ALWAYS MERGED - No silent videos
     
     Args:
         script_file: Path to script JSON
@@ -1232,7 +1268,7 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
         Path to output video file or None if failed
     """
     
-    log(f"🎬 Editing LONG video with HARD-BURNED subtitles...")
+    log(f"🎬 Editing LONG video with HARD-BURNED subtitles and AUDIO...")
     log(f"   Run ID: {run_id}")
     
     # Setup paths
@@ -1416,7 +1452,7 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     width, height, duration, is_short, fps = get_video_metadata(video_for_subtitles)
     log(f"📹 Video metadata: {width}x{height}, {duration:.1f}s, {fps:.1f}fps")
     
-    # Render final video with HARD-BURNED subtitles
+    # Render final video with HARD-BURNED subtitles and AUDIO
     render_success = False
     
     # Always burn subtitles if SRT file exists
@@ -1425,19 +1461,38 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
         subtitles_srt_path = Path(subtitles_file)
         log(f"📝 Found subtitles file: {subtitles_srt_path}")
         
-        # Render with hard-burned subtitles
+        # Render with hard-burned subtitles and audio
         render_success = render_video_with_hard_subtitles(
             video_for_subtitles,
             output_file,
             subtitles_srt_path,
+            audio_file,  # Pass audio file for merging
             duration,
             'long'
         )
     else:
-        # No subtitles, just copy
-        log("⚠️ No subtitles file found, rendering without subtitles")
-        shutil.copy2(video_for_subtitles, output_file)
-        render_success = True
+        # No subtitles, just copy with audio
+        log("⚠️ No subtitles file found, rendering without subtitles but with audio")
+        
+        # Simple copy with audio merge
+        cmd_copy = [
+            'ffmpeg', '-y',
+            '-i', str(video_for_subtitles),
+            '-i', str(audio_file),
+            '-map', '0:v:0',
+            '-map', '1:a:0',
+            '-c:v', 'copy',
+            '-c:a', 'aac',
+            '-shortest',
+            str(output_file)
+        ]
+        
+        try:
+            subprocess.run(cmd_copy, check=True, capture_output=True)
+            render_success = True
+        except Exception as e:
+            log(f"❌ Failed to copy video with audio: {e}")
+            render_success = False
     
     # ============================================================================
     # CRITICAL: POST-RENDER VALIDATION - SILENT FAILURES MUST BE IMPOSSIBLE
@@ -1504,7 +1559,7 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     final_video_duration = get_video_duration(output_file)
     
     size_mb = output_file.stat().st_size / (1024 * 1024)
-    log(f"✅ LONG video with HARD-BURNED subtitles complete")
+    log(f"✅ LONG video with HARD-BURNED subtitles and AUDIO complete")
     log(f"   Output: {output_file}")
     log(f"   Size: {size_mb:.2f} MB")
     log(f"   Final video duration: {final_video_duration:.1f}s ({final_video_duration/60:.2f}m)")
@@ -1513,6 +1568,7 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     log(f"   FPS: {fps:.1f}")
     log(f"   Subtitles: Hard-burned (permanent)")
     log(f"   Font: {SUBTITLE_FONT}")
+    log(f"   Audio: Merged (AAC)")
     log(f"   Clips used: {len(valid_clips)}")
     
     # Save metadata
@@ -1538,6 +1594,8 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
         'subtitles_alignment': 'center',
         'subtitles_outline': SUBTITLE_OUTLINE_WIDTH,
         'subtitles_shadow': SUBTITLE_SHADOW,
+        'audio_included': True,
+        'audio_codec': 'AAC',
         'clips_validated': len(valid_clips),
         'manifest_pages': manifest_data.get('pages_searched', 1) if manifest_data else 1,
         'audio_authority_validated': True,
@@ -1589,6 +1647,7 @@ def main():
     log(f"   AUDIO DURATION AUTHORITY: ENABLED")
     log(f"   POST-RENDER VALIDATION: AUTOMATIC (ALWAYS RUNS)")
     log(f"   SUBTITLE FONT: {SUBTITLE_FONT} (fixed)")
+    log(f"   AUDIO MERGE: ENABLED (CRITICAL FIX)")
     log("=" * 80)
     
     # Step 1: Dynamically find audio file if not specified
@@ -1637,10 +1696,11 @@ def main():
         )
     
     if output_file:
-        log(f"✅ {args.type.upper()} video with HARD-BURNED subtitles created successfully")
+        log(f"✅ {args.type.upper()} video with HARD-BURNED subtitles and AUDIO created successfully")
         log(f"   Output: {output_file}")
         log(f"   AUDIO DURATION AUTHORITY enforced - final video matches audio")
         log(f"   Subtitles permanently burned into video frames")
+        log(f"   AUDIO merged successfully - NO SILENT VIDEOS")
         sys.exit(0)
     else:
         log(f"❌ FATAL: {args.type.upper()} video creation failed - no video generated")
