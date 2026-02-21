@@ -316,16 +316,6 @@ SUBTITLE_OUTLINE_WIDTH = 2
 SUBTITLE_SHADOW = 1
 SUBTITLE_ALIGNMENT = 2  # Center aligned
 
-# Resolve absolute font directory at startup for GitHub Actions compatibility
-_SCRIPT_DIR = Path(__file__).resolve().parent
-_FONT_DIR_ABSOLUTE = (_SCRIPT_DIR / FONT_DIR).resolve()
-# If the relative path doesn't exist, try common system locations
-_SYSTEM_FONT_FALLBACKS = [
-    Path("/usr/share/fonts/truetype/noto"),
-    Path("/usr/share/fonts/truetype"),
-    Path("/usr/share/fonts"),
-]
-
 
 # ============================================================================
 # PREMIUM COLOR PALETTE (KEPT FOR REFERENCE BUT NOT USED)
@@ -543,49 +533,48 @@ def render_video_with_hard_subtitles(
         log(f"❌ Input video not found or empty: {input_video}")
         return False
 
-    # Verify font file exists - try absolute path first, then fallbacks
+    # Verify font file exists
     font_path = Path(FONT_DIR) / f"{FONT_NAME}.ttf"
-    if not font_path.is_absolute():
-        font_path = _FONT_DIR_ABSOLUTE / f"{FONT_NAME}.ttf"
-    
     if not font_path.exists():
-        # Try system font fallbacks
-        for fallback_dir in _SYSTEM_FONT_FALLBACKS:
-            candidate = fallback_dir / f"{FONT_NAME}.ttf"
-            if candidate.exists():
-                font_path = candidate
-                log(f"✅ Font found at system fallback: {font_path}")
-                break
-        else:
-            log(f"⚠️ Font file not found at: {font_path}", "WARNING")
-            log(f"   Using system font fallback - ligatures may render incorrectly!", "WARNING")
+        log(f"⚠️ Font file not found at: {font_path}", "WARNING")
+        log(f"   Using system font fallback - ligatures may render incorrectly!", "WARNING")
     else:
         log(f"✅ Font file verified: {font_path}")
 
-    # Set fontconfig environment variables for GitHub Actions compatibility
-    os.environ["FONTCONFIG_PATH"] = "/usr/share/fonts"
+    # FIX: Set fontconfig to use a WRITABLE cache directory inside the workspace.
+    # The root cause of "Operation not permitted" is libass trying to write font cache
+    # to /usr/share/fonts which is read-only in GitHub Actions sandbox.
+    # Solution: redirect font cache to a temp dir we own.
+    fontconfig_cache_dir = Path(tempfile.mkdtemp(prefix="fontconfig_cache_"))
+    os.environ["FONTCONFIG_PATH"] = "/etc/fonts"
     os.environ["FONTCONFIG_FILE"] = "/etc/fonts/fonts.conf"
+    os.environ["XDG_CACHE_HOME"] = str(fontconfig_cache_dir)
+    os.environ["FC_CACHE_DIR"] = str(fontconfig_cache_dir)
+    log(f"✅ Fontconfig cache redirected to writable dir: {fontconfig_cache_dir}")
 
     # Build subtitle filter with absolute path.
-    # CRITICAL: Relative paths cause "Operation not permitted" in GitHub Actions.
-    # On Linux, paths never contain colons, so NO colon escaping needed.
-    # Single quotes around the path can cause parsing issues in certain libass versions.
-    # Use the correct FFmpeg filter escaping: escape only special filter chars [\:'].
+    # CRITICAL: Use fontsdir parameter to point libass to our font, and
+    # force=1 to skip the broken system font scanning that triggers permission errors.
     abs_subtitle_path = str(subtitles_srt.resolve())
-    # Escape characters special to FFmpeg's filter-chain parser: \ : '
-    # Step 1: Escape backslashes (shouldn't exist on Linux, but be safe)
-    esc = abs_subtitle_path.replace('\\', '\\\\')
-    # Step 2: Escape colons (won't exist on Linux absolute paths but safe to include)
-    esc = esc.replace(':', r'\:')
-    # Step 3: Escape single quotes
-    esc = esc.replace("'", r"\'")
-    subtitle_filter = f"subtitles={esc}"
-    
-    # Add font directory to subtitle filter if font exists
+    # Escape colons and backslashes for FFmpeg filter-chain parser
+    escaped_subtitle_path = abs_subtitle_path.replace('\\', '/').replace(':', r'\:')
+
+    # Check if we have our own font file to use
+    font_path = Path(FONT_DIR) / f"{FONT_NAME}.ttf"
+    abs_font_dir = str(Path(FONT_DIR).resolve())
+    escaped_font_dir = abs_font_dir.replace('\\', '/').replace(':', r'\:')
+
     if font_path.exists():
-        font_dir_esc = str(font_path.parent).replace('\\', '\\\\').replace(':', r'\:').replace("'", r"\'")
-        subtitle_filter = f"subtitles={esc}:fontsdir={font_dir_esc}"
-        log(f"   Using fontsdir: {font_path.parent}")
+        # Use explicit fontsdir to avoid system font permission issues
+        subtitle_filter = (
+            f"subtitles='{escaped_subtitle_path}'"
+            f":fontsdir='{escaped_font_dir}'"
+        )
+        log(f"✅ Using subtitle filter with explicit fontsdir: {abs_font_dir}")
+    else:
+        # Fallback: use subtitles filter without fontsdir
+        subtitle_filter = f"subtitles='{escaped_subtitle_path}'"
+        log(f"⚠️ Font dir not found, using subtitle filter without fontsdir")
 
     # Determine resolution based on video type
     if video_type == "short":
@@ -649,6 +638,14 @@ def render_video_with_hard_subtitles(
         log(f"⏱️ Long video timeout set to 75 minutes ({timeout_seconds/60:.1f}m)")
     
     try:
+        # Build environment for FFmpeg subprocess.
+        # CRITICAL: Pass fontconfig cache env vars so libass uses writable dir.
+        ffmpeg_env = os.environ.copy()
+        ffmpeg_env["XDG_CACHE_HOME"] = str(fontconfig_cache_dir)
+        ffmpeg_env["FC_CACHE_DIR"] = str(fontconfig_cache_dir)
+        ffmpeg_env["FONTCONFIG_PATH"] = "/etc/fonts"
+        ffmpeg_env["FONTCONFIG_FILE"] = "/etc/fonts/fonts.conf"
+
         # FIXED: Use Popen with live progress output
         # This prevents the "frozen" appearance and shows encoding progress
         process = subprocess.Popen(
@@ -657,7 +654,8 @@ def render_video_with_hard_subtitles(
             stderr=subprocess.STDOUT,  # Redirect stderr to stdout
             text=True,
             bufsize=1,
-            universal_newlines=True
+            universal_newlines=True,
+            env=ffmpeg_env
         )
         
         log(f"📊 FFmpeg encoding started - showing live progress:")
