@@ -11,6 +11,7 @@ FIXED: Audio is now properly merged into final videos (CRITICAL BUG FIX)
 FIXED: Devanagari font rendering - Now uses explicit font file for proper ligatures
 FIXED: Video encoding quality - Now enforces consistent HD resolution with CRF 18
 FIXED: FFmpeg execution - Added live progress output, proper timeouts, and timestamp regeneration
+FIXED: Subtitle filter - Removed force_style parameter to eliminate libass wrap_unicode crash on GitHub Actions
 """
 import os
 import json
@@ -499,6 +500,7 @@ def render_video_with_hard_subtitles(
     - FIXED: Live progress output shows encoding status
     - FIXED: Proper timeout values for short (45 min) and long (75 min) videos
     - FIXED: No premature termination - encoding completes reliably
+    - FIXED: Removed force_style parameter to eliminate libass wrap_unicode crash on GitHub Actions
     
     Args:
         input_video: Path to input video
@@ -519,6 +521,7 @@ def render_video_with_hard_subtitles(
     log(f"   Font size: {SUBTITLE_FONTSIZE}")
     log(f"   QUALITY SETTINGS: CRF 18, preset medium, forced HD resolution")
     log(f"   FFMPEG FIXES: +genpts (timestamp regeneration), threads 0 (optimal CPU)")
+    log(f"   SUBTITLE FIX: Removed force_style parameter to eliminate libass wrap_unicode crash")
     
     # Verify subtitle file exists
     if not subtitles_srt.exists():
@@ -539,18 +542,11 @@ def render_video_with_hard_subtitles(
         log(f"✅ Font file verified: {font_path}")
     
     # Create subtitle filter string with explicit font file and directory
-    # Format: subtitles=filename:fontsdir=/path/to/fonts:force_style='FontName=fontfile,FontSize=28,...'
-    # IMPORTANT: Using exact font filename without .ttf extension for FontName parameter
+    # FIXED: Removed force_style parameter to eliminate libass wrap_unicode crash on GitHub Actions
+    # Font is still properly located via fontsdir parameter
     subtitle_filter = (
         f"subtitles={subtitles_srt}:"
-        f"fontsdir={FONT_DIR}:"
-        f"force_style='FontName={FONT_NAME},"
-        f"FontSize={SUBTITLE_FONTSIZE},"
-        f"PrimaryColour={SUBTITLE_PRIMARY_COLOR},"
-        f"OutlineColour={SUBTITLE_OUTLINE_COLOR},"
-        f"Outline={SUBTITLE_OUTLINE_WIDTH},"
-        f"Shadow={SUBTITLE_SHADOW},"
-        f"Alignment={SUBTITLE_ALIGNMENT}'"
+        f"fontsdir={FONT_DIR}"
     )
     
     # Determine resolution based on video type
@@ -604,6 +600,7 @@ def render_video_with_hard_subtitles(
     log(f"   Audio codec: AAC, 192k")
     log(f"   Filter chain: {vf_filter}")
     log(f"   FFMPEG FIXES: +genpts, threads 0 applied")
+    log(f"   SUBTITLE FIX: force_style parameter removed")
     
     # Set timeout based on video type
     if video_type == "short":
@@ -1932,6 +1929,7 @@ def main():
     log(f"   FFMPEG FIXES: +genpts (timestamp regeneration), threads 0 (optimal CPU)")
     log(f"   FFMPEG PROGRESS: LIVE OUTPUT ENABLED (no more freezing)")
     log(f"   FFMPEG TIMEOUTS: Shorts=45min, Long=75min (safe limits)")
+    log(f"   SUBTITLE FILTER: force_style parameter removed (fixes libass wrap_unicode crash)")
     log("=" * 80)
     
     # Step 1: Dynamically find audio file if not specified
@@ -1988,6 +1986,7 @@ def main():
         log(f"   Devanagari ligatures rendered properly (क्या, not क् या)")
         log(f"   AUDIO merged successfully - NO SILENT VIDEOS")
         log(f"   FFMPEG FIXES applied - live progress shown, no freezing, correct timeouts")
+        log(f"   SUBTITLE FIX: force_style parameter removed - libass wrap_unicode crash eliminated")
         sys.exit(0)
     else:
         log(f"❌ FATAL: {args.type.upper()} video creation failed - no video generated")
