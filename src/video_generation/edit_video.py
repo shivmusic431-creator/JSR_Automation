@@ -476,63 +476,63 @@ def render_video_with_hard_subtitles(
     input_video: Path,
     output_video: Path,
     subtitles_srt: Path,
-    audio_file: str,
+    audio_file: str,       # Kept in signature for call-site compatibility, NOT used internally
     video_duration: float,
     video_type: str = "long"
 ) -> bool:
     """
-    Render final video with hard-burned subtitles and audio using FFmpeg.
-    
-    Uses the subtitles filter to permanently burn subtitles into video frames.
-    Merges audio from the provided audio file.
-    Uses explicit font file from assets/fonts/NotoSansDevanagari-Regular.ttf
-    for proper Devanagari ligature rendering (fixes "क् या" → "क्या").
-    
-    ENHANCED QUALITY SETTINGS:
+    Render final video with hard-burned subtitles using FFmpeg.
+
+    PIPELINE ARCHITECTURE (CRITICAL):
+    - Stage 1 (assemble): clips are concatenated AND audio is merged → assembled_video.mp4
+    - Stage 2 (this function): subtitles are burned into assembled_video.mp4
+    The input_video ALREADY contains the merged audio stream.
+    Therefore this function uses ONLY ONE INPUT and copies the audio stream as-is.
+    Re-merging audio here would create a two-input filtergraph conflict (exit code 255).
+
+    CORRECT APPROACH:
+    - Single input: input_video (already has audio)
+    - Video: re-encode with libx264 + subtitle burn
+    - Audio: -c:a copy  (stream-copy, no re-encode, no quality loss)
+    - No -map flags, no -shortest, no second -i
+
+    QUALITY SETTINGS:
     - CRF 18: Visually lossless quality
-    - preset medium: Good compression speed/quality balance
-    - Resolution normalization: Forces consistent HD resolution
-    - High quality audio: AAC at 192k
-    
-    FIXED FFMPEG EXECUTION:
-    - Added -fflags +genpts to regenerate timestamps (prevents subtitle filter crashes)
-    - Added -threads 0 for optimal CPU utilization
-    - FIXED: Live progress output shows encoding status
-    - FIXED: Proper timeout values for short (45 min) and long (75 min) videos
-    - FIXED: No premature termination - encoding completes reliably
-    - FIXED: Added charenc=UTF-8 to subtitles filter for proper Hindi Unicode rendering
-    
+    - preset medium: Good compression/speed balance
+    - Resolution normalised to target HD dimensions
+    - Audio preserved losslessly via stream copy
+
     Args:
-        input_video: Path to input video
+        input_video: Path to assembled input video (ALREADY contains audio)
         output_video: Path to output video
         subtitles_srt: Path to SRT subtitles file
-        audio_file: Path to audio file to merge
-        video_duration: Duration of video in seconds (for progress tracking)
-        video_type: Type of video ('long' or 'short') - used for logging only
-        
+        audio_file: UNUSED - kept only so call sites need no changes
+        video_duration: Duration in seconds (used for timeout calculation only)
+        video_type: 'long' or 'short' - controls resolution target
+
     Returns:
-        True if successful
+        True if render succeeded, False otherwise
     """
-    log(f"🎥 Rendering video with hard-burned subtitles and audio...")
+    log(f"🎥 Rendering video with hard-burned subtitles (SINGLE-INPUT, audio stream-copy)...")
+    log(f"   Input video (with audio): {input_video}")
     log(f"   Subtitle file: {subtitles_srt}")
-    log(f"   Audio file: {audio_file}")
+    log(f"   Audio handling: -c:a copy (stream-copy from input_video, no re-merge)")
     log(f"   Font directory: {FONT_DIR}")
     log(f"   Font file: {FONT_NAME}.ttf")
     log(f"   Font size: {SUBTITLE_FONTSIZE}")
     log(f"   QUALITY SETTINGS: CRF 18, preset medium, forced HD resolution")
     log(f"   FFMPEG FIXES: +genpts (timestamp regeneration), threads 0 (optimal CPU)")
-    log(f"   SUBTITLE FIX: Added charenc=UTF-8 for proper Hindi Unicode rendering")
-    
+
     # Verify subtitle file exists
     if not subtitles_srt.exists():
         log(f"❌ Subtitle file not found: {subtitles_srt}")
         return False
-    
-    # Verify audio file exists
-    if not Path(audio_file).exists():
-        log(f"❌ Audio file not found: {audio_file}")
+
+    # Verify input video exists and is non-empty
+    if not input_video.exists() or input_video.stat().st_size == 0:
+        log(f"❌ Input video not found or empty: {input_video}")
         return False
-    
+
     # Verify font file exists
     font_path = Path(FONT_DIR) / f"{FONT_NAME}.ttf"
     if not font_path.exists():
@@ -540,70 +540,68 @@ def render_video_with_hard_subtitles(
         log(f"   Using system font fallback - ligatures may render incorrectly!", "WARNING")
     else:
         log(f"✅ Font file verified: {font_path}")
-    
+
     # Set fontconfig environment variables for GitHub Actions compatibility
     os.environ["FONTCONFIG_PATH"] = "/usr/share/fonts"
     os.environ["FONTCONFIG_FILE"] = "/etc/fonts/fonts.conf"
-    
-    # Create subtitle filter string with minimal parameters for GitHub Actions compatibility
-    # IMPORTANT: No charenc, fontsdir, or force_style parameters to avoid libass crash
-    subtitle_filter = f"subtitles={subtitles_srt}"
-    
+
+    # Build subtitle filter with absolute path.
+    # CRITICAL: Relative paths cause "Operation not permitted" in GitHub Actions.
+    # Colons in the path must be escaped for FFmpeg's filter-chain parser.
+    abs_subtitle_path = str(subtitles_srt.resolve())
+    escaped_subtitle_path = abs_subtitle_path.replace('\\', '/').replace(':', r'\:')
+    subtitle_filter = f"subtitles='{escaped_subtitle_path}'"
+
     # Determine resolution based on video type
     if video_type == "short":
-        # Shorts: 1080x1920 (portrait)
-        target_width = 1080
-        target_height = 1920
-        scale_filter = f"scale={target_width}:{target_height}:force_original_aspect_ratio=increase,crop={target_width}:{target_height}"
+        target_width, target_height = 1080, 1920
     else:
-        # Long form: 1920x1080 (landscape)
-        target_width = 1920
-        target_height = 1080
-        scale_filter = f"scale={target_width}:{target_height}:force_original_aspect_ratio=increase,crop={target_width}:{target_height}"
-    
-    # Combine filters: first scale to target resolution, then apply subtitles, then set pixel format
-    # IMPORTANT: Subtitles filter must come before format filter for proper rendering
-    vf_filter = f"{scale_filter},{subtitle_filter},format=yuv420p"
-    
-    # Log the filter chain for debugging
-    log(f"Using subtitle filter: {vf_filter}")
-    
-    # Build FFmpeg command with high quality settings and audio merging
-    # IMPORTANT: ALWAYS re-encode with libx264 for consistent quality
-    # FIXES:
-    # - Added -fflags +genpts to regenerate timestamps (prevents subtitle filter crashes)
-    # - Added -threads 0 for optimal CPU utilization
+        target_width, target_height = 1920, 1080
+
+    scale_filter = (
+        f"scale={target_width}:{target_height}"
+        f":force_original_aspect_ratio=increase"
+        f",crop={target_width}:{target_height}"
+    )
+
+    # Filter chain: scale → burn subtitles
+    # format=yuv420p is handled by -pix_fmt flag to avoid filter-chain conflicts
+    vf_filter = f"{scale_filter},{subtitle_filter}"
+
+    log(f"Using video filter chain: {vf_filter}")
+
+    # -------------------------------------------------------------------------
+    # SINGLE-INPUT FFmpeg command.
+    # input_video already contains the merged audio from Stage 1.
+    # -c:a copy  → stream-copy audio, zero quality loss, no filtergraph conflict.
+    # No -map flags needed: FFmpeg automatically selects the single video + audio stream.
+    # No -shortest: duration is already correct from Stage 1.
+    # -------------------------------------------------------------------------
     cmd = [
         'ffmpeg', '-y',
-        '-fflags', '+genpts',  # Regenerate timestamps (FIXES subtitle filter crashes)
-        '-threads', '0',        # Optimal CPU utilization
-        '-i', str(input_video),
-        '-i', str(audio_file),
-        '-vf', vf_filter,       # FIXED: Using proper filter chain without unsupported parameters
-        '-map', '0:v:0',  # Video from first input
-        '-map', '1:a:0',  # Audio from second input
-        '-c:v', 'libx264',  # Always re-encode video
-        '-preset', 'medium',  # Good balance of speed and compression
-        '-crf', '18',  # Visually lossless quality
-        '-c:a', 'aac',  # High quality audio encoding
-        '-b:a', '192k',  # High audio bitrate
-        '-shortest',  # Match to shortest stream (usually audio)
-        '-pix_fmt', 'yuv420p',  # Ensure consistent pixel format
-        '-movflags', '+faststart',  # Web optimization
+        '-fflags', '+genpts',       # Regenerate timestamps (prevents subtitle filter crashes)
+        '-threads', '0',             # Optimal CPU utilisation
+        '-i', str(input_video),      # SINGLE INPUT — already contains audio
+        '-vf', vf_filter,            # Scale + burn subtitles
+        '-c:v', 'libx264',           # Re-encode video to burn in subtitles
+        '-preset', 'medium',
+        '-crf', '18',                # Visually lossless
+        '-c:a', 'copy',              # Stream-copy audio — no re-merge, no quality loss
+        '-pix_fmt', 'yuv420p',
+        '-movflags', '+faststart',   # Web optimisation
         '-metadata', f'title=YT-AutoPilot {video_type} video',
         '-metadata', 'artist=AI Generated',
         '-metadata', 'comment=Created with YT-AutoPilot',
         str(output_video)
     ]
-    
-    # Log command for debugging
-    log(f"⚙️ Running FFmpeg with enhanced quality settings...")
+
+    # Log command summary for debugging
+    log(f"⚙️ Running FFmpeg (subtitle burn, single-input)...")
     log(f"   Video codec: libx264, CRF 18, preset medium")
     log(f"   Resolution: {target_width}x{target_height}")
-    log(f"   Audio codec: AAC, 192k")
+    log(f"   Audio codec: copy (stream-copy from input_video)")
     log(f"   Filter chain: {vf_filter}")
     log(f"   FFMPEG FIXES: +genpts, threads 0 applied")
-    log(f"   SUBTITLE FIX: Removed unsupported parameters for GitHub Actions compatibility")
     
     # Set timeout based on video type
     if video_type == "short":
