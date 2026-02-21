@@ -10,6 +10,7 @@ FIXED: Subtitles are now properly burned into video using subtitles filter
 FIXED: Audio is now properly merged into final videos (CRITICAL BUG FIX)
 FIXED: Devanagari font rendering - Now uses explicit font file for proper ligatures
 FIXED: Video encoding quality - Now enforces consistent HD resolution with CRF 18
+FIXED: FFmpeg execution - Added live progress output, proper timeouts, and timestamp regeneration
 """
 import os
 import json
@@ -24,6 +25,7 @@ import tempfile
 import hashlib
 import random
 import shutil
+import time
 
 def log(message: str, level: str = "INFO"):
     """Simple logging with timestamp"""
@@ -147,6 +149,7 @@ def trim_video_to_audio_duration(input_video: Path, output_video: Path, target_d
     
     cmd = [
         'ffmpeg', '-y',
+        '-fflags', '+genpts',  # Regenerate timestamps
         '-i', str(input_video),
         '-t', str(target_duration),
         '-c', 'copy',  # Stream copy for speed - acceptable for trimming
@@ -154,7 +157,7 @@ def trim_video_to_audio_duration(input_video: Path, output_video: Path, target_d
     ]
     
     try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=300)
         
         if output_video.exists() and output_video.stat().st_size > 0:
             trimmed_duration = get_video_duration(output_video)
@@ -163,6 +166,9 @@ def trim_video_to_audio_duration(input_video: Path, output_video: Path, target_d
         else:
             log(f"❌ Trimmed video is empty", "ERROR")
             return False
+    except subprocess.TimeoutExpired:
+        log(f"❌ Video trimming timed out", "ERROR")
+        return False
     except subprocess.CalledProcessError as e:
         log(f"❌ Video trimming failed: {e.stderr if e.stderr else 'Unknown error'}", "ERROR")
         return False
@@ -435,7 +441,7 @@ def get_video_metadata(video_path: Path) -> tuple:
     ]
     
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=10)
         info = json.loads(result.stdout)
         
         width = info['streams'][0]['width']
@@ -487,6 +493,13 @@ def render_video_with_hard_subtitles(
     - Resolution normalization: Forces consistent HD resolution
     - High quality audio: AAC at 192k
     
+    FIXED FFMPEG EXECUTION:
+    - Added -fflags +genpts to regenerate timestamps (prevents subtitle filter crashes)
+    - Added -threads 0 for optimal CPU utilization
+    - FIXED: Live progress output shows encoding status
+    - FIXED: Proper timeout values for short (45 min) and long (75 min) videos
+    - FIXED: No premature termination - encoding completes reliably
+    
     Args:
         input_video: Path to input video
         output_video: Path to output video
@@ -505,6 +518,7 @@ def render_video_with_hard_subtitles(
     log(f"   Font file: {FONT_NAME}.ttf")
     log(f"   Font size: {SUBTITLE_FONTSIZE}")
     log(f"   QUALITY SETTINGS: CRF 18, preset medium, forced HD resolution")
+    log(f"   FFMPEG FIXES: +genpts (timestamp regeneration), threads 0 (optimal CPU)")
     
     # Verify subtitle file exists
     if not subtitles_srt.exists():
@@ -557,8 +571,13 @@ def render_video_with_hard_subtitles(
     
     # Build FFmpeg command with high quality settings and audio merging
     # IMPORTANT: ALWAYS re-encode with libx264 for consistent quality
+    # FIXES:
+    # - Added -fflags +genpts to regenerate timestamps (prevents subtitle filter crashes)
+    # - Added -threads 0 for optimal CPU utilization
     cmd = [
         'ffmpeg', '-y',
+        '-fflags', '+genpts',  # Regenerate timestamps (FIXES subtitle filter crashes)
+        '-threads', '0',        # Optimal CPU utilization
         '-i', str(input_video),
         '-i', str(audio_file),
         '-vf', vf_filter,
@@ -584,64 +603,100 @@ def render_video_with_hard_subtitles(
     log(f"   Resolution: {target_width}x{target_height}")
     log(f"   Audio codec: AAC, 192k")
     log(f"   Filter chain: {vf_filter}")
+    log(f"   FFMPEG FIXES: +genpts, threads 0 applied")
+    
+    # Set timeout based on video type
+    if video_type == "short":
+        # Short videos: 45 minutes timeout
+        timeout_seconds = 2700
+        log(f"⏱️ Short video timeout set to 45 minutes ({timeout_seconds/60:.1f}m)")
+    else:
+        # Long videos: 75 minutes timeout (fixed, not dependent on duration)
+        timeout_seconds = 4500
+        log(f"⏱️ Long video timeout set to 75 minutes ({timeout_seconds/60:.1f}m)")
     
     try:
-        # Run FFmpeg with progress monitoring
+        # FIXED: Use Popen with live progress output
+        # This prevents the "frozen" appearance and shows encoding progress
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.STDOUT,  # Redirect stderr to stdout
             text=True,
-            bufsize=1
+            bufsize=1,
+            universal_newlines=True
         )
         
-        # Monitor progress
-        last_progress = 0
+        log(f"📊 FFmpeg encoding started - showing live progress:")
+        log("-" * 80)
+        
+        start_time = time.time()
+        
+        # Read and display output line by line
         while True:
-            output = process.stderr.readline()
-            if output == '' and process.poll() is not None:
-                break
-            if output and 'time=' in output:
-                time_match = re.search(r'time=(\d+:\d+:\d+\.\d+)', output)
-                if time_match:
-                    time_str = time_match.group(1)
-                    h, m, s = map(float, time_str.split(':'))
-                    current_time = h * 3600 + m * 60 + s
-                    progress = (current_time / video_duration) * 100
-                    
-                    # Log every 10% progress
-                    if int(progress / 10) > int(last_progress / 10):
-                        log(f"⏱️ Rendering progress: {progress:.1f}%")
-                    last_progress = progress
-        
-        returncode = process.poll()
-        
-        if returncode == 0:
-            if output_video.exists() and output_video.stat().st_size > 0:
-                size_mb = output_video.stat().st_size / (1024 * 1024)
-                log(f"✅ Video rendered successfully with hard subtitles and audio: {size_mb:.2f} MB")
-                
-                # Quick verification that file is valid
-                probe_cmd = [
-                    'ffprobe', '-v', 'error',
-                    '-show_entries', 'stream=codec_type',
-                    '-of', 'json',
-                    str(output_video)
-                ]
-                try:
-                    probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
-                    if probe_result.returncode == 0:
-                        log(f"✅ Output video verified")
-                except:
-                    pass
-                
-                return True
-        
-        log(f"❌ FFmpeg failed with code {returncode}")
-        return False
+            line = process.stdout.readline()
             
+            if line:
+                # Print the line to show progress
+                print(line.strip())
+                sys.stdout.flush()
+            
+            # Check if process has finished
+            if process.poll() is not None:
+                break
+            
+            # Check timeout
+            if time.time() - start_time > timeout_seconds:
+                process.kill()
+                error_msg = f"❌ FFmpeg timeout exceeded ({timeout_seconds/60:.1f} minutes) - process killed"
+                log(error_msg, "ERROR")
+                raise RuntimeError(error_msg)
+        
+        log("-" * 80)
+        
+        # Check return code
+        if process.returncode != 0:
+            log(f"❌ FFmpeg failed with code {process.returncode}", "ERROR")
+            return False
+            
+        # Verify output file exists and has content
+        if output_video.exists() and output_video.stat().st_size > 0:
+            size_mb = output_video.stat().st_size / (1024 * 1024)
+            log(f"✅ Video rendered successfully with hard subtitles and audio: {size_mb:.2f} MB")
+            
+            # Quick verification that file is valid
+            probe_cmd = [
+                'ffprobe', '-v', 'error',
+                '-show_entries', 'stream=codec_type',
+                '-of', 'json',
+                str(output_video)
+            ]
+            try:
+                probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=10)
+                if probe_result.returncode == 0:
+                    log(f"✅ Output video verified")
+                    return True
+                else:
+                    log(f"⚠️ Output video may be corrupted - ffprobe check failed")
+                    return False
+            except Exception as e:
+                log(f"⚠️ Failed to verify output video: {e}")
+                return False
+        else:
+            log(f"❌ Output video file missing or empty", "ERROR")
+            return False
+            
+    except subprocess.TimeoutExpired:
+        log(f"❌ FFmpeg process timed out after {timeout_seconds/60:.1f} minutes", "ERROR")
+        process.kill()
+        try:
+            process.wait(timeout=30)
+        except:
+            pass
+        return False
+        
     except Exception as e:
-        log(f"❌ FFmpeg execution failed: {e}")
+        log(f"❌ FFmpeg execution failed: {e}", "ERROR")
         return False
 
 
@@ -951,6 +1006,8 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     # Note: This is just assembly, final encoding happens in render step
     cmd = [
         'ffmpeg', '-y',
+        '-fflags', '+genpts',  # Regenerate timestamps
+        '-threads', '0',        # Optimal CPU utilization
         '-f', 'concat', '-safe', '0', '-i', str(concat_file),
         '-i', audio_file,
         '-c:v', 'libx264', '-preset', 'medium',
@@ -964,31 +1021,45 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
         str(assembled_video)
     ]
     
-    # Execute first pass (video assembly) - SAFE NON-BLOCKING EXECUTION
+    # Execute first pass (video assembly) - FIXED WITH PROPER TIMEOUT AND LIVE PROGRESS
     log("🎬 Assembling video with HD quality settings...")
     try:
-        # FIX: Use Popen with stream reading to prevent buffer deadlock
+        # FIXED: Use Popen with live progress output
         process = subprocess.Popen(
             cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
-            bufsize=1
+            bufsize=1,
+            universal_newlines=True
         )
         
-        # Read stderr line by line to prevent buffer overflow
+        log(f"📊 FFmpeg assembly started - showing live progress:")
+        log("-" * 80)
+        
+        start_time = time.time()
+        assembly_timeout = 600  # 10 minutes for assembly
+        
         while True:
-            line = process.stderr.readline()
-            if not line and process.poll() is not None:
+            line = process.stdout.readline()
+            
+            if line:
+                print(line.strip())
+                sys.stdout.flush()
+            
+            if process.poll() is not None:
                 break
-            # Optionally log progress lines if needed
-            if line and 'time=' in line:
-                log(f"⏱️ Assembly progress: {line.strip()}")
+            
+            if time.time() - start_time > assembly_timeout:
+                process.kill()
+                log(f"❌ Video assembly timed out after 10 minutes", "ERROR")
+                return None
         
-        returncode = process.poll()
+        log("-" * 80)
         
-        if returncode != 0:
-            raise RuntimeError(f"FFmpeg assembly failed with code {returncode}")
+        if process.returncode != 0:
+            log(f"❌ FFmpeg assembly failed with code {process.returncode}")
+            return None
         
         log(f"✅ Video assembled: {assembled_video}")
     except Exception as e:
@@ -1071,6 +1142,8 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
         # Encode with high quality settings (no subtitles)
         cmd_encode = [
             'ffmpeg', '-y',
+            '-fflags', '+genpts',  # Regenerate timestamps
+            '-threads', '0',        # Optimal CPU utilization
             '-i', str(video_for_subtitles),
             '-i', str(audio_file),
             '-map', '0:v:0',
@@ -1087,8 +1160,46 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
         ]
         
         try:
-            subprocess.run(cmd_encode, check=True, capture_output=True)
-            render_success = True
+            # FIXED: Use Popen with live progress output
+            process = subprocess.Popen(
+                cmd_encode,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                universal_newlines=True
+            )
+            
+            log(f"📊 Encoding started - showing live progress:")
+            log("-" * 80)
+            
+            start_time = time.time()
+            encoding_timeout = 2700  # 45 minutes for shorts
+            
+            while True:
+                line = process.stdout.readline()
+                
+                if line:
+                    print(line.strip())
+                    sys.stdout.flush()
+                
+                if process.poll() is not None:
+                    break
+                
+                if time.time() - start_time > encoding_timeout:
+                    process.kill()
+                    log(f"❌ Encoding timed out after 45 minutes", "ERROR")
+                    render_success = False
+                    break
+            
+            log("-" * 80)
+            
+            if process.returncode == 0:
+                render_success = True
+            else:
+                log(f"❌ Failed to encode video with audio (code {process.returncode})")
+                render_success = False
+                
         except Exception as e:
             log(f"❌ Failed to encode video with audio: {e}")
             render_success = False
@@ -1184,6 +1295,8 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
             final_output = output_dir / 'short_video_with_overlays.mp4'
             cmd_overlay = [
                 'ffmpeg', '-y',
+                '-fflags', '+genpts',  # Regenerate timestamps
+                '-threads', '0',        # Optimal CPU utilization
                 '-i', str(output_file),
                 '-vf', ','.join(overlay_filters),
                 '-c:v', 'libx264', '-preset', 'medium',
@@ -1193,10 +1306,44 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
             ]
             
             try:
-                subprocess.run(cmd_overlay, check=True)
-                if final_output.exists() and final_output.stat().st_size > 0:
+                # FIXED: Use Popen with live progress output
+                process = subprocess.Popen(
+                    cmd_overlay,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    universal_newlines=True
+                )
+                
+                log(f"📊 Adding overlays - showing live progress:")
+                log("-" * 80)
+                
+                start_time = time.time()
+                overlay_timeout = 300  # 5 minutes for overlay
+                
+                while True:
+                    line = process.stdout.readline()
+                    
+                    if line:
+                        print(line.strip())
+                        sys.stdout.flush()
+                    
+                    if process.poll() is not None:
+                        break
+                    
+                    if time.time() - start_time > overlay_timeout:
+                        process.kill()
+                        log(f"❌ Overlay addition timed out", "ERROR")
+                        break
+                
+                log("-" * 80)
+                
+                if process.returncode == 0 and final_output.exists() and final_output.stat().st_size > 0:
                     shutil.move(str(final_output), str(output_file))
                     log("✅ Overlays added successfully")
+                else:
+                    log(f"⚠️ Overlay addition failed with code {process.returncode}")
             except Exception as e:
                 log(f"⚠️ Overlay addition failed: {e}")
     
@@ -1419,6 +1566,8 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     # Note: This is just assembly, final encoding happens in render step
     cmd = [
         'ffmpeg', '-y',
+        '-fflags', '+genpts',  # Regenerate timestamps
+        '-threads', '0',        # Optimal CPU utilization
         '-f', 'concat', '-safe', '0', '-i', str(concat_file),
         '-i', audio_file,
         '-c:v', 'libx264', '-preset', 'medium',
@@ -1432,31 +1581,45 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
         str(assembled_video)
     ]
     
-    # Execute first pass (video assembly) - SAFE NON-BLOCKING EXECUTION
+    # Execute first pass (video assembly) - FIXED WITH PROPER TIMEOUT AND LIVE PROGRESS
     log("🎬 Assembling video with HD quality settings...")
     try:
-        # FIX: Use Popen with stream reading to prevent buffer deadlock
+        # FIXED: Use Popen with live progress output
         process = subprocess.Popen(
             cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
-            bufsize=1
+            bufsize=1,
+            universal_newlines=True
         )
         
-        # Read stderr line by line to prevent buffer overflow
+        log(f"📊 FFmpeg assembly started - showing live progress:")
+        log("-" * 80)
+        
+        start_time = time.time()
+        assembly_timeout = 10800  # 3 hours for long video assembly
+        
         while True:
-            line = process.stderr.readline()
-            if not line and process.poll() is not None:
+            line = process.stdout.readline()
+            
+            if line:
+                print(line.strip())
+                sys.stdout.flush()
+            
+            if process.poll() is not None:
                 break
-            # Optionally log progress lines if needed
-            if line and 'time=' in line:
-                log(f"⏱️ Assembly progress: {line.strip()}")
+            
+            if time.time() - start_time > assembly_timeout:
+                process.kill()
+                log(f"❌ Video assembly timed out after {assembly_timeout/3600:.1f} hours", "ERROR")
+                return None
         
-        returncode = process.poll()
+        log("-" * 80)
         
-        if returncode != 0:
-            raise RuntimeError(f"FFmpeg assembly failed with code {returncode}")
+        if process.returncode != 0:
+            log(f"❌ FFmpeg assembly failed with code {process.returncode}")
+            return None
         
         log(f"✅ Video assembled: {assembled_video}")
     except Exception as e:
@@ -1539,6 +1702,8 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
         # Encode with high quality settings (no subtitles)
         cmd_encode = [
             'ffmpeg', '-y',
+            '-fflags', '+genpts',  # Regenerate timestamps
+            '-threads', '0',        # Optimal CPU utilization
             '-i', str(video_for_subtitles),
             '-i', str(audio_file),
             '-map', '0:v:0',
@@ -1555,8 +1720,46 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
         ]
         
         try:
-            subprocess.run(cmd_encode, check=True, capture_output=True)
-            render_success = True
+            # FIXED: Use Popen with live progress output
+            process = subprocess.Popen(
+                cmd_encode,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                universal_newlines=True
+            )
+            
+            log(f"📊 Encoding started - showing live progress:")
+            log("-" * 80)
+            
+            start_time = time.time()
+            encoding_timeout = 4500  # 75 minutes for long videos
+            
+            while True:
+                line = process.stdout.readline()
+                
+                if line:
+                    print(line.strip())
+                    sys.stdout.flush()
+                
+                if process.poll() is not None:
+                    break
+                
+                if time.time() - start_time > encoding_timeout:
+                    process.kill()
+                    log(f"❌ Encoding timed out after {encoding_timeout/60:.1f} minutes", "ERROR")
+                    render_success = False
+                    break
+            
+            log("-" * 80)
+            
+            if process.returncode == 0:
+                render_success = True
+            else:
+                log(f"❌ Failed to encode video with audio (code {process.returncode})")
+                render_success = False
+                
         except Exception as e:
             log(f"❌ Failed to encode video with audio: {e}")
             render_success = False
@@ -1726,6 +1929,9 @@ def main():
     log(f"   AUDIO QUALITY: AAC 192k")
     log(f"   SUBTITLE FONT: {FONT_DIR}/{FONT_NAME}.ttf (explicit font file)")
     log(f"   AUDIO MERGE: ENABLED (CRITICAL FIX)")
+    log(f"   FFMPEG FIXES: +genpts (timestamp regeneration), threads 0 (optimal CPU)")
+    log(f"   FFMPEG PROGRESS: LIVE OUTPUT ENABLED (no more freezing)")
+    log(f"   FFMPEG TIMEOUTS: Shorts=45min, Long=75min (safe limits)")
     log("=" * 80)
     
     # Step 1: Dynamically find audio file if not specified
@@ -1781,6 +1987,7 @@ def main():
         log(f"   Subtitles permanently burned into video frames using {FONT_DIR}/{FONT_NAME}.ttf")
         log(f"   Devanagari ligatures rendered properly (क्या, not क् या)")
         log(f"   AUDIO merged successfully - NO SILENT VIDEOS")
+        log(f"   FFMPEG FIXES applied - live progress shown, no freezing, correct timeouts")
         sys.exit(0)
     else:
         log(f"❌ FATAL: {args.type.upper()} video creation failed - no video generated")
