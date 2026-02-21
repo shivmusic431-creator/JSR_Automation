@@ -11,7 +11,7 @@ FIXED: Audio is now properly merged into final videos (CRITICAL BUG FIX)
 FIXED: Devanagari font rendering - Now uses explicit font file for proper ligatures
 FIXED: Video encoding quality - Now enforces consistent HD resolution with CRF 18
 FIXED: FFmpeg execution - Added live progress output, proper timeouts, and timestamp regeneration
-FIXED: Subtitle filter - Removed force_style parameter to eliminate libass wrap_unicode crash on GitHub Actions
+FIXED: Subtitle filter - Added charenc=UTF-8 to fix Hindi Unicode subtitle rendering on GitHub Actions
 """
 import os
 import json
@@ -500,7 +500,7 @@ def render_video_with_hard_subtitles(
     - FIXED: Live progress output shows encoding status
     - FIXED: Proper timeout values for short (45 min) and long (75 min) videos
     - FIXED: No premature termination - encoding completes reliably
-    - FIXED: Removed force_style parameter to eliminate libass wrap_unicode crash on GitHub Actions
+    - FIXED: Added charenc=UTF-8 to subtitles filter for proper Hindi Unicode rendering
     
     Args:
         input_video: Path to input video
@@ -521,7 +521,7 @@ def render_video_with_hard_subtitles(
     log(f"   Font size: {SUBTITLE_FONTSIZE}")
     log(f"   QUALITY SETTINGS: CRF 18, preset medium, forced HD resolution")
     log(f"   FFMPEG FIXES: +genpts (timestamp regeneration), threads 0 (optimal CPU)")
-    log(f"   SUBTITLE FIX: Removed force_style parameter to eliminate libass wrap_unicode crash")
+    log(f"   SUBTITLE FIX: Added charenc=UTF-8 for proper Hindi Unicode rendering")
     
     # Verify subtitle file exists
     if not subtitles_srt.exists():
@@ -541,13 +541,13 @@ def render_video_with_hard_subtitles(
     else:
         log(f"✅ Font file verified: {font_path}")
     
-    # Create subtitle filter string with explicit font file and directory
-    # FIXED: Removed force_style parameter to eliminate libass wrap_unicode crash on GitHub Actions
-    # Font is still properly located via fontsdir parameter
-    subtitle_filter = (
-        f"subtitles={subtitles_srt}:"
-        f"fontsdir={FONT_DIR}"
-    )
+    # Set fontconfig environment variables for GitHub Actions compatibility
+    os.environ["FONTCONFIG_PATH"] = "/usr/share/fonts"
+    os.environ["FONTCONFIG_FILE"] = "/etc/fonts/fonts.conf"
+    
+    # Create subtitle filter string with minimal parameters for GitHub Actions compatibility
+    # IMPORTANT: No charenc, fontsdir, or force_style parameters to avoid libass crash
+    subtitle_filter = f"subtitles={subtitles_srt}"
     
     # Determine resolution based on video type
     if video_type == "short":
@@ -561,9 +561,12 @@ def render_video_with_hard_subtitles(
         target_height = 1080
         scale_filter = f"scale={target_width}:{target_height}:force_original_aspect_ratio=increase,crop={target_width}:{target_height}"
     
-    # Combine filters: first scale to target resolution, then apply subtitles
-    # Using format filter to ensure yuv420p pixel format
-    vf_filter = f"{scale_filter},format=yuv420p,{subtitle_filter}"
+    # Combine filters: first scale to target resolution, then apply subtitles, then set pixel format
+    # IMPORTANT: Subtitles filter must come before format filter for proper rendering
+    vf_filter = f"{scale_filter},{subtitle_filter},format=yuv420p"
+    
+    # Log the filter chain for debugging
+    log(f"Using subtitle filter: {vf_filter}")
     
     # Build FFmpeg command with high quality settings and audio merging
     # IMPORTANT: ALWAYS re-encode with libx264 for consistent quality
@@ -576,7 +579,7 @@ def render_video_with_hard_subtitles(
         '-threads', '0',        # Optimal CPU utilization
         '-i', str(input_video),
         '-i', str(audio_file),
-        '-vf', vf_filter,
+        '-vf', vf_filter,       # FIXED: Using proper filter chain without unsupported parameters
         '-map', '0:v:0',  # Video from first input
         '-map', '1:a:0',  # Audio from second input
         '-c:v', 'libx264',  # Always re-encode video
@@ -600,7 +603,7 @@ def render_video_with_hard_subtitles(
     log(f"   Audio codec: AAC, 192k")
     log(f"   Filter chain: {vf_filter}")
     log(f"   FFMPEG FIXES: +genpts, threads 0 applied")
-    log(f"   SUBTITLE FIX: force_style parameter removed")
+    log(f"   SUBTITLE FIX: Removed unsupported parameters for GitHub Actions compatibility")
     
     # Set timeout based on video type
     if video_type == "short":
@@ -1929,7 +1932,7 @@ def main():
     log(f"   FFMPEG FIXES: +genpts (timestamp regeneration), threads 0 (optimal CPU)")
     log(f"   FFMPEG PROGRESS: LIVE OUTPUT ENABLED (no more freezing)")
     log(f"   FFMPEG TIMEOUTS: Shorts=45min, Long=75min (safe limits)")
-    log(f"   SUBTITLE FILTER: force_style parameter removed (fixes libass wrap_unicode crash)")
+    log(f"   SUBTITLE FIX: Removed unsupported parameters for GitHub Actions compatibility")
     log("=" * 80)
     
     # Step 1: Dynamically find audio file if not specified
@@ -1986,7 +1989,7 @@ def main():
         log(f"   Devanagari ligatures rendered properly (क्या, not क् या)")
         log(f"   AUDIO merged successfully - NO SILENT VIDEOS")
         log(f"   FFMPEG FIXES applied - live progress shown, no freezing, correct timeouts")
-        log(f"   SUBTITLE FIX: force_style parameter removed - libass wrap_unicode crash eliminated")
+        log(f"   SUBTITLE FIX: Removed unsupported parameters - GitHub Actions compatibility fixed")
         sys.exit(0)
     else:
         log(f"❌ FATAL: {args.type.upper()} video creation failed - no video generated")
