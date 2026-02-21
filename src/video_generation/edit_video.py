@@ -552,29 +552,23 @@ def render_video_with_hard_subtitles(
     os.environ["FC_CACHE_DIR"] = str(fontconfig_cache_dir)
     log(f"✅ Fontconfig cache redirected to writable dir: {fontconfig_cache_dir}")
 
-    # Build subtitle filter with absolute path.
-    # CRITICAL: Use fontsdir parameter to point libass to our font, and
-    # force=1 to skip the broken system font scanning that triggers permission errors.
-    abs_subtitle_path = str(subtitles_srt.resolve())
-    # Escape colons and backslashes for FFmpeg filter-chain parser
-    escaped_subtitle_path = abs_subtitle_path.replace('\\', '/').replace(':', r'\:')
-
-    # Check if we have our own font file to use
-    font_path = Path(FONT_DIR) / f"{FONT_NAME}.ttf"
-    abs_font_dir = str(Path(FONT_DIR).resolve())
-    escaped_font_dir = abs_font_dir.replace('\\', '/').replace(':', r'\:')
-
-    if font_path.exists():
-        # Use explicit fontsdir to avoid system font permission issues
-        subtitle_filter = (
-            f"subtitles='{escaped_subtitle_path}'"
-            f":fontsdir='{escaped_font_dir}'"
-        )
-        log(f"✅ Using subtitle filter with explicit fontsdir: {abs_font_dir}")
-    else:
-        # Fallback: use subtitles filter without fontsdir
-        subtitle_filter = f"subtitles='{escaped_subtitle_path}'"
-        log(f"⚠️ Font dir not found, using subtitle filter without fontsdir")
+    # Build subtitle filter with absolute paths using correct FFmpeg syntax
+    # FIX: Using proper subtitles filter syntax: filename=, fontsdir=, charenc=
+    # CRITICAL: Use absolute paths to ensure FFmpeg finds the files
+    subtitles_path = subtitles_srt.resolve()
+    fonts_path = Path(FONT_DIR).resolve()
+    
+    # Escape apostrophes in paths for filter syntax
+    subtitles_path_escaped = str(subtitles_path).replace("'", "'\\''")
+    fonts_path_escaped = str(fonts_path).replace("'", "'\\''")
+    
+    subtitle_filter = (
+        f"subtitles=filename='{subtitles_path_escaped}':"
+        f"fontsdir='{fonts_path_escaped}':"
+        f"charenc=UTF-8"
+    )
+    
+    log(f"✅ Using subtitle filter: {subtitle_filter}")
 
     # Determine resolution based on video type
     if video_type == "short":
@@ -588,8 +582,8 @@ def render_video_with_hard_subtitles(
         f",crop={target_width}:{target_height}"
     )
 
-    # Filter chain: scale → burn subtitles
-    # format=yuv420p is handled by -pix_fmt flag to avoid filter-chain conflicts
+    # Filter chain: scale → subtitles
+    # Note: format=yuv420p is handled by -pix_fmt flag to avoid filter-chain conflicts
     vf_filter = f"{scale_filter},{subtitle_filter}"
 
     log(f"Using video filter chain: {vf_filter}")
