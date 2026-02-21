@@ -605,23 +605,16 @@ jobs:
           sudo apt install -y fonts-noto fonts-noto-core fonts-noto-extra fonts-noto-ui-core fonts-noto-ui-extra
           fc-cache -fv
           echo "✅ Noto Sans Devanagari fonts installed for Hindi subtitle support"
-          # CRITICAL FIX: Copy the font to assets/fonts so edit_video.py can use
-          # fontsdir parameter with libass - avoids /usr/share/fonts permission errors
           mkdir -p assets/fonts
-          FONT_SRC=$(fc-list | grep -i "NotoSansDevanagari-Regular" | head -1 | cut -d: -f1)
+          FONT_SRC=$(find /usr/share/fonts -name "*NotoSansDevanagari*Regular*" 2>/dev/null | head -1)
           if [ -n "$FONT_SRC" ]; then
             cp "$FONT_SRC" assets/fonts/NotoSansDevanagari-Regular.ttf
-            echo "✅ Font copied to assets/fonts/: $FONT_SRC"
+            echo "✅ Font copied to assets/fonts/"
           else
-            # Fallback: find any NotoSansDevanagari font
-            FONT_SRC=$(find /usr/share/fonts -name "*NotoSansDevanagari*Regular*" 2>/dev/null | head -1)
-            if [ -n "$FONT_SRC" ]; then
-              cp "$FONT_SRC" assets/fonts/NotoSansDevanagari-Regular.ttf
-              echo "✅ Font copied (fallback): $FONT_SRC"
-            else
-              echo "⚠️ NotoSansDevanagari-Regular not found, will use system font fallback"
-            fi
+            echo "⚠️ NotoSansDevanagari-Regular not found, system fallback will be used"
           fi
+
+      - name: Download Long Script Artifact
         uses: actions/download-artifact@v4
         with:
           name: script-long-${{ env.RUN_ID }}
@@ -755,20 +748,13 @@ jobs:
           sudo apt install -y fonts-noto fonts-noto-core fonts-noto-extra fonts-noto-ui-core fonts-noto-ui-extra
           fc-cache -fv
           echo "✅ Noto Sans Devanagari fonts installed for Hindi subtitle support"
-          # CRITICAL FIX: Copy font to assets/fonts for libass fontsdir usage
           mkdir -p assets/fonts
-          FONT_SRC=$(fc-list | grep -i "NotoSansDevanagari-Regular" | head -1 | cut -d: -f1)
+          FONT_SRC=$(find /usr/share/fonts -name "*NotoSansDevanagari*Regular*" 2>/dev/null | head -1)
           if [ -n "$FONT_SRC" ]; then
             cp "$FONT_SRC" assets/fonts/NotoSansDevanagari-Regular.ttf
-            echo "✅ Font copied to assets/fonts/: $FONT_SRC"
+            echo "✅ Font copied to assets/fonts/"
           else
-            FONT_SRC=$(find /usr/share/fonts -name "*NotoSansDevanagari*Regular*" 2>/dev/null | head -1)
-            if [ -n "$FONT_SRC" ]; then
-              cp "$FONT_SRC" assets/fonts/NotoSansDevanagari-Regular.ttf
-              echo "✅ Font copied (fallback): $FONT_SRC"
-            else
-              echo "⚠️ NotoSansDevanagari-Regular not found, will use system font fallback"
-            fi
+            echo "⚠️ NotoSansDevanagari-Regular not found, system fallback will be used"
           fi
 
       - name: Download Short Script Artifact
