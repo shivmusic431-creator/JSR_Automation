@@ -402,7 +402,7 @@ For a 10-15 minute script (1400-1900 words), you will create approximately:
 You MUST return ONLY a valid JSON object. Do NOT include any explanation, preamble, or text before or after the JSON.
 Do NOT wrap it in markdown code blocks (```json). Return the raw JSON object directly.
 
-The JSON MUST have this EXACT structure:
+The JSON MUST have this EXACT structure (no extra fields, no comments):
 {{
   "metadata": {{
     "title_options": ["Option 1", "Option 2", "Option 3"],
@@ -417,39 +417,39 @@ The JSON MUST have this EXACT structure:
   "chunks": [
     {{
       "chunk_id": 1,
-      "text": "Complete Hindi narration text for chunk 1 with emotional indicators like (गंभीर स्वर में) and scene markers [SCENE: type]. Must end with a complete sentence (। ? !). Word count: between 80-120 words."
+      "text": "Complete Hindi narration for chunk 1. Emotional indicator on own line. Scene marker on own line. Ends with complete sentence (। ? !). 80-120 words."
     }},
     {{
       "chunk_id": 2,
-      "text": "Complete Hindi narration text for chunk 2 with emotional indicators and scene markers. Must start with the natural continuation from chunk 1. Must end with a complete sentence (। ? !). Word count: between 80-120 words."
+      "text": "Natural continuation from chunk 1. Same rules apply. 80-120 words."
     }},
     {{
       "chunk_id": 3,
-      "text": "Complete Hindi narration text for chunk 3 with emotional indicators and scene markers. Must start with the natural continuation from chunk 2. Must end with a complete sentence (। ? !). Word count: between 80-120 words."
+      "text": "Natural continuation from chunk 2. Same rules apply. 80-120 words."
     }}
-    // Add more chunks as needed (typically 14-20 total for 1400-1900 word script)
   ],
-  "full_script": "The COMPLETE concatenation of ALL chunks in order. This must be exactly chunk1.text + chunk2.text + chunk3.text + ... with no modifications.",
   "script": {{
     "word_count": 1600,
     "estimated_duration": "12:30"
   }}
 }}
 
+NOTE: Add as many chunk objects as needed (typically 14-20 for a 1400-1900 word script).
+NOTE: Do NOT include a "full_script" field — it wastes tokens and causes truncation.
+NOTE: Do NOT add JavaScript-style comments (// ...) inside the JSON — that is invalid JSON.
+
 **CRITICAL VALIDATION RULES:**
-- Verify that `full_script` is exactly the concatenation of all chunk texts
-- Verify that each chunk contains complete sentences only
-- Verify that no sentence is split across chunks
-- Verify that total words in chunks = word_count in script
-- Verify that chunks cover 100% of the script content with no gaps
-- **Verify that NO chunk exceeds 120 words (this is a hard limit to ensure XTTS Hindi reliability)**
+- Each chunk contains complete sentences only — never split mid-sentence
+- No chunk exceeds 120 words (hard limit for XTTS Hindi reliability)
+- Chunk IDs are sequential: 1, 2, 3, ... with no gaps
+- Chunks cover 100% of the script with no gaps or overlaps
+- Total words across all chunks matches word_count in script
 
 **ENSURE THE JSON IS COMPLETE AND VALID. DO NOT TRUNCATE ANY SECTION.**
 **REMEMBER: Pure Hindi (देवनागरी लिपि), NOT Hinglish**
 **REMEMBER: Emotional indicators must be on separate lines BEFORE sentences**
 **REMEMBER: Scene markers must be on separate lines, NOT spoken**
-**REMEMBER: CHUNKS MUST BE 80-120 WORDS EACH (STRICT LIMIT), COMPLETE SENTENCES ONLY**
-**REMEMBER: USING MORE SMALLER CHUNKS IS BETTER FOR XTTS HINDI RELIABILITY**"""
+**REMEMBER: CHUNKS MUST BE 80-120 WORDS EACH (STRICT LIMIT), COMPLETE SENTENCES ONLY**"""
     
     return prompt
 
@@ -1244,7 +1244,7 @@ def generate_script(category, sub_category, episode, run_id, video_type='long'):
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     temperature=0.7,
-                    max_output_tokens=8192,  # Maximum allowed
+                    max_output_tokens=65536,  # CRITICAL FIX: 8192 caused truncation. Hindi script JSON needs 25k+ chars.
                     top_p=0.9,
                     top_k=40,
                     response_mime_type="application/json"  # CRITICAL: Force structured JSON output
@@ -1328,17 +1328,15 @@ def generate_script(category, sub_category, episode, run_id, video_type='long'):
             if 'chunks' not in script_data:
                 raise ValueError("JSON missing required field: 'chunks' for long script")
             
-            if 'full_script' not in script_data:
-                # Try to construct full_script from chunks if missing
-                if 'chunks' in script_data:
-                    full_script = ""
-                    for chunk in sorted(script_data['chunks'], key=lambda x: x.get('chunk_id', 0)):
-                        if 'text' in chunk:
-                            full_script += chunk['text']
-                    script_data['full_script'] = full_script
-                    print("⚠️ Missing 'full_script', constructed from chunks")
-                else:
-                    raise ValueError("JSON missing required field: 'full_script'")
+            # Always rebuild full_script from chunks — model no longer outputs it
+            # (removing full_script from prompt saves ~1500-2000 tokens, preventing truncation)
+            full_script_built = " ".join(
+                chunk['text'].strip()
+                for chunk in sorted(script_data['chunks'], key=lambda x: x.get('chunk_id', 0))
+                if 'text' in chunk
+            )
+            script_data['full_script'] = full_script_built
+            print("✅ full_script built from chunks")
             
             # ===== PRODUCTION SAFETY VALIDATION =====
             # Validate chunk integrity - this will raise RuntimeError if validation fails
