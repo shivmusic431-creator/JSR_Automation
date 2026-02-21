@@ -316,6 +316,16 @@ SUBTITLE_OUTLINE_WIDTH = 2
 SUBTITLE_SHADOW = 1
 SUBTITLE_ALIGNMENT = 2  # Center aligned
 
+# Resolve absolute font directory at startup for GitHub Actions compatibility
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_FONT_DIR_ABSOLUTE = (_SCRIPT_DIR / FONT_DIR).resolve()
+# If the relative path doesn't exist, try common system locations
+_SYSTEM_FONT_FALLBACKS = [
+    Path("/usr/share/fonts/truetype/noto"),
+    Path("/usr/share/fonts/truetype"),
+    Path("/usr/share/fonts"),
+]
+
 
 # ============================================================================
 # PREMIUM COLOR PALETTE (KEPT FOR REFERENCE BUT NOT USED)
@@ -533,11 +543,22 @@ def render_video_with_hard_subtitles(
         log(f"❌ Input video not found or empty: {input_video}")
         return False
 
-    # Verify font file exists
+    # Verify font file exists - try absolute path first, then fallbacks
     font_path = Path(FONT_DIR) / f"{FONT_NAME}.ttf"
+    if not font_path.is_absolute():
+        font_path = _FONT_DIR_ABSOLUTE / f"{FONT_NAME}.ttf"
+    
     if not font_path.exists():
-        log(f"⚠️ Font file not found at: {font_path}", "WARNING")
-        log(f"   Using system font fallback - ligatures may render incorrectly!", "WARNING")
+        # Try system font fallbacks
+        for fallback_dir in _SYSTEM_FONT_FALLBACKS:
+            candidate = fallback_dir / f"{FONT_NAME}.ttf"
+            if candidate.exists():
+                font_path = candidate
+                log(f"✅ Font found at system fallback: {font_path}")
+                break
+        else:
+            log(f"⚠️ Font file not found at: {font_path}", "WARNING")
+            log(f"   Using system font fallback - ligatures may render incorrectly!", "WARNING")
     else:
         log(f"✅ Font file verified: {font_path}")
 
@@ -547,10 +568,24 @@ def render_video_with_hard_subtitles(
 
     # Build subtitle filter with absolute path.
     # CRITICAL: Relative paths cause "Operation not permitted" in GitHub Actions.
-    # Colons in the path must be escaped for FFmpeg's filter-chain parser.
+    # On Linux, paths never contain colons, so NO colon escaping needed.
+    # Single quotes around the path can cause parsing issues in certain libass versions.
+    # Use the correct FFmpeg filter escaping: escape only special filter chars [\:'].
     abs_subtitle_path = str(subtitles_srt.resolve())
-    escaped_subtitle_path = abs_subtitle_path.replace('\\', '/').replace(':', r'\:')
-    subtitle_filter = f"subtitles='{escaped_subtitle_path}'"
+    # Escape characters special to FFmpeg's filter-chain parser: \ : '
+    # Step 1: Escape backslashes (shouldn't exist on Linux, but be safe)
+    esc = abs_subtitle_path.replace('\\', '\\\\')
+    # Step 2: Escape colons (won't exist on Linux absolute paths but safe to include)
+    esc = esc.replace(':', r'\:')
+    # Step 3: Escape single quotes
+    esc = esc.replace("'", r"\'")
+    subtitle_filter = f"subtitles={esc}"
+    
+    # Add font directory to subtitle filter if font exists
+    if font_path.exists():
+        font_dir_esc = str(font_path.parent).replace('\\', '\\\\').replace(':', r'\:').replace("'", r"\'")
+        subtitle_filter = f"subtitles={esc}:fontsdir={font_dir_esc}"
+        log(f"   Using fontsdir: {font_path.parent}")
 
     # Determine resolution based on video type
     if video_type == "short":
