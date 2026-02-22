@@ -12,6 +12,8 @@ FIXED: Devanagari font rendering - Now uses explicit font file for proper ligatu
 FIXED: Video encoding quality - Now enforces consistent HD resolution with CRF 18
 FIXED: FFmpeg execution - Added live progress output, proper timeouts, and timestamp regeneration
 FIXED: Subtitle filter - Pure SRT input, absolute paths, proper escaping
+FIXED: Concat generation - Now properly loops clips to guarantee duration >= target
+FIXED: Removed -shortest flag from assembly to prevent frame duplication
 """
 import os
 import json
@@ -469,6 +471,228 @@ def get_video_metadata(video_path: Path) -> tuple:
 
 
 # ============================================================================
+# FIXED: CLIP MANAGEMENT WITH ENHANCED LOOPING - PROPER DURATION GUARANTEE
+# ============================================================================
+
+def get_clip_duration(clip_path: Path) -> float:
+    """Get individual clip duration using ffprobe"""
+    cmd = [
+        'ffprobe', '-v', 'error',
+        '-show_entries', 'format=duration',
+        '-of', 'default=noprint_wrappers=1:nokey=1',
+        str(clip_path)
+    ]
+    
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=2)
+        return float(result.stdout.strip())
+    except Exception as e:
+        log(f"⚠️ Could not determine duration for {clip_path.name}: {e}")
+        return 0.0
+
+
+def validate_clip_for_use(clip_path: Path) -> bool:
+    """
+    Validate clip is still usable before adding to concat
+    Performs quick check to ensure file is not corrupted
+    """
+    if not clip_path.exists():
+        return False
+    
+    # Quick check with ffprobe
+    cmd = [
+        'ffprobe', '-v', 'error',
+        '-select_streams', 'v:0',
+        '-show_entries', 'stream=codec_type',
+        '-of', 'json',
+        str(clip_path)
+    ]
+    
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+        data = json.loads(result.stdout)
+        streams = data.get('streams', [])
+        return len(streams) > 0 and streams[0].get('codec_type') == 'video'
+    except:
+        return False
+
+
+def calculate_total_clips_duration(clips: list, clips_path: Path) -> tuple:
+    """
+    Calculate total duration of all unique clips with validation
+    Returns validated clips and their total duration
+    """
+    total_duration = 0.0
+    valid_clips = []
+    invalid_clips = []
+    
+    log("🔍 Validating clips for use...")
+    
+    for clip in clips:
+        clip_path = Path(clip)
+        if not clip_path.exists():
+            clip_path = clips_path / clip_path.name
+        
+        if clip_path.exists():
+            if validate_clip_for_use(clip_path):
+                duration = get_clip_duration(clip_path)
+                if duration > 0:
+                    total_duration += duration
+                    valid_clips.append(str(clip_path.absolute()))
+                    log(f"  ✅ {clip_path.name}: {duration:.2f}s")
+                else:
+                    invalid_clips.append(str(clip_path))
+                    log(f"  ❌ {clip_path.name}: Invalid duration", "WARNING")
+            else:
+                invalid_clips.append(str(clip_path))
+                log(f"  ❌ {clip_path.name}: Corrupted or invalid", "WARNING")
+        else:
+            invalid_clips.append(str(clip_path))
+            log(f"  ❌ {clip_path.name}: File missing", "WARNING")
+    
+    log(f"📊 Valid clips: {len(valid_clips)} (total {total_duration:.2f}s)")
+    if invalid_clips:
+        log(f"⚠️ Invalid clips skipped: {len(invalid_clips)}")
+    
+    return total_duration, valid_clips
+
+
+def create_optimized_concat_file(clips: list, output_dir: Path, run_id: str, target_duration: float) -> Path:
+    """
+    Create optimized concat file that GUARANTEES cumulative duration >= target_duration.
+    Dynamically loops clips until duration condition is satisfied.
+    
+    CRITICAL FIX: Previously only wrote clips once, causing FFmpeg to stretch video
+    and duplicate frames. Now properly loops clips until target duration is met.
+    
+    Args:
+        clips: List of clip file paths
+        output_dir: Directory to write concat file
+        run_id: Run identifier for unique filename
+        target_duration: Target duration to meet or exceed
+        
+    Returns:
+        Path to created concat file
+        
+    Raises:
+        RuntimeError: If no valid clip durations can be determined
+    """
+    concat_file = output_dir / f'concat_{run_id}.txt'
+    
+    log(f"🔧 Creating optimized concat file targeting duration: {target_duration:.2f}s")
+    log("Concat generation fixed and duration guaranteed")
+    
+    # Cache clip durations for performance
+    durations = {}
+    total_single_loop_duration = 0.0
+    
+    # Calculate duration of each clip
+    for clip in clips:
+        clip_path = Path(clip)
+        duration = get_clip_duration(clip_path)
+        clip_str = str(clip_path)
+        durations[clip_str] = duration
+        total_single_loop_duration += duration
+    
+    # Validate we have usable durations
+    if total_single_loop_duration <= 0:
+        error_msg = "❌ FATAL: No valid clip durations detected - cannot create concat file"
+        log(error_msg, "ERROR")
+        raise RuntimeError(error_msg)
+    
+    log(f"📊 Single loop duration: {total_single_loop_duration:.2f}s")
+    
+    # Calculate approximate loops needed (for logging only)
+    estimated_loops = math.ceil(target_duration / total_single_loop_duration)
+    log(f"🔄 Estimated loops needed: {estimated_loops}")
+    
+    cumulative_duration = 0.0
+    loop_index = 0
+    
+    # Write concat file with dynamic looping
+    with open(concat_file, "w", encoding="utf-8") as f:
+        while cumulative_duration < target_duration:
+            loop_index += 1
+            
+            # Shuffle clips for variety in each loop
+            shuffled_clips = clips.copy()
+            random.shuffle(shuffled_clips)
+            
+            log(f"🔄 Writing concat loop #{loop_index} (cumulative: {cumulative_duration:.2f}s / {target_duration:.2f}s)")
+            
+            for clip in shuffled_clips:
+                clip_str = str(Path(clip))
+                duration = durations[clip_str]
+                
+                # Write clip to concat file
+                f.write(f"file '{clip_str}'\n")
+                cumulative_duration += duration
+                
+                # Stop immediately if we've met or exceeded target
+                if cumulative_duration >= target_duration:
+                    log(f"✅ Target duration reached at {cumulative_duration:.2f}s")
+                    break
+    
+    log(f"📊 Final concat duration: {cumulative_duration:.2f}s (target: {target_duration:.2f}s)")
+    log(f"📝 Wrote {loop_index} loop(s) with {len(clips)} unique clips")
+    
+    return concat_file
+
+
+def verify_manifest_integrity(manifest_path: Path, clips_path: Path) -> tuple:
+    """
+    Verify all clips in manifest exist and are valid
+    Returns (valid_clips_list, total_duration, is_valid)
+    """
+    if not manifest_path.exists():
+        log(f"❌ Manifest file not found: {manifest_path}", "ERROR")
+        return [], 0.0, False
+    
+    try:
+        with open(manifest_path, 'r', encoding='utf-8') as f:
+            manifest = json.load(f)
+        
+        clips = manifest.get('clips', [])
+        audio_authority_target = manifest.get('audio_authority_target', manifest.get('target_duration', 0))
+        
+        log(f"🔍 Verifying manifest integrity: {len(clips)} clips, audio authority target: {audio_authority_target:.1f}s")
+        
+        valid_clips = []
+        total_duration = 0.0
+        
+        for clip in clips:
+            # Get clip path
+            clip_path = None
+            if 'filename' in clip:
+                clip_path = clips_path / clip['filename']
+            elif 'file' in clip:
+                clip_path = Path(clip['file'])
+            
+            if not clip_path or not clip_path.exists():
+                log(f"❌ Clip missing from disk: {clip.get('filename', 'unknown')}", "ERROR")
+                return [], 0.0, False
+            
+            if not validate_clip_for_use(clip_path):
+                log(f"❌ Clip corrupted or unreadable: {clip_path.name}", "ERROR")
+                return [], 0.0, False
+            
+            duration = clip.get('duration', 0)
+            if duration <= 0:
+                duration = get_clip_duration(clip_path)
+            
+            valid_clips.append(str(clip_path.absolute()))
+            total_duration += duration
+        
+        log(f"📊 Verified {len(valid_clips)} valid clips, total duration: {total_duration:.1f}s")
+        
+        return valid_clips, total_duration, True
+        
+    except Exception as e:
+        log(f"❌ Failed to verify manifest: {e}", "ERROR")
+        return [], 0.0, False
+
+
+# ============================================================================
 # FIXED VIDEO RENDERING WITH HARD SUBTITLES AND AUDIO - ENHANCED QUALITY
 # ============================================================================
 
@@ -750,182 +974,6 @@ def render_video_with_hard_subtitles(
 
 
 # ============================================================================
-# CLIP MANAGEMENT WITH ENHANCED LOOPING
-# ============================================================================
-
-def get_clip_duration(clip_path: Path) -> float:
-    """Get individual clip duration using ffprobe"""
-    cmd = [
-        'ffprobe', '-v', 'error',
-        '-show_entries', 'format=duration',
-        '-of', 'default=noprint_wrappers=1:nokey=1',
-        str(clip_path)
-    ]
-    
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=2)
-        return float(result.stdout.strip())
-    except Exception as e:
-        log(f"⚠️ Could not determine duration for {clip_path.name}: {e}")
-        return 0.0
-
-
-def validate_clip_for_use(clip_path: Path) -> bool:
-    """
-    Validate clip is still usable before adding to concat
-    Performs quick check to ensure file is not corrupted
-    """
-    if not clip_path.exists():
-        return False
-    
-    # Quick check with ffprobe
-    cmd = [
-        'ffprobe', '-v', 'error',
-        '-select_streams', 'v:0',
-        '-show_entries', 'stream=codec_type',
-        '-of', 'json',
-        str(clip_path)
-    ]
-    
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
-        data = json.loads(result.stdout)
-        streams = data.get('streams', [])
-        return len(streams) > 0 and streams[0].get('codec_type') == 'video'
-    except:
-        return False
-
-
-def calculate_total_clips_duration(clips: list, clips_path: Path) -> tuple:
-    """
-    Calculate total duration of all unique clips with validation
-    Returns validated clips and their total duration
-    """
-    total_duration = 0.0
-    valid_clips = []
-    invalid_clips = []
-    
-    log("🔍 Validating clips for use...")
-    
-    for clip in clips:
-        clip_path = Path(clip)
-        if not clip_path.exists():
-            clip_path = clips_path / clip_path.name
-        
-        if clip_path.exists():
-            if validate_clip_for_use(clip_path):
-                duration = get_clip_duration(clip_path)
-                if duration > 0:
-                    total_duration += duration
-                    valid_clips.append(str(clip_path.absolute()))
-                    log(f"  ✅ {clip_path.name}: {duration:.2f}s")
-                else:
-                    invalid_clips.append(str(clip_path))
-                    log(f"  ❌ {clip_path.name}: Invalid duration", "WARNING")
-            else:
-                invalid_clips.append(str(clip_path))
-                log(f"  ❌ {clip_path.name}: Corrupted or invalid", "WARNING")
-        else:
-            invalid_clips.append(str(clip_path))
-            log(f"  ❌ {clip_path.name}: File missing", "WARNING")
-    
-    log(f"📊 Valid clips: {len(valid_clips)} (total {total_duration:.2f}s)")
-    if invalid_clips:
-        log(f"⚠️ Invalid clips skipped: {len(invalid_clips)}")
-    
-    return total_duration, valid_clips
-
-
-def create_optimized_concat_file(clips: list, output_dir: Path, run_id: str, target_duration: float) -> Path:
-    """
-    Create optimized concat file with shuffled clips for better variety
-    Ensures clips are not repeated consecutively
-    """
-    concat_file = output_dir / f'concat_{run_id}.txt'
-    
-    # Shuffle clips for variety but ensure no immediate repeats
-    shuffled_clips = []
-    available_clips = clips.copy()
-    
-    while available_clips:
-        # Pick random clip
-        clip_idx = random.randint(0, len(available_clips) - 1)
-        clip = available_clips[clip_idx]
-        
-        # Avoid repeating the same clip consecutively
-        if shuffled_clips and shuffled_clips[-1] == clip and len(available_clips) > 1:
-            # Try another clip
-            other_indices = [i for i in range(len(available_clips)) if i != clip_idx]
-            if other_indices:
-                clip_idx = random.choice(other_indices)
-                clip = available_clips[clip_idx]
-        
-        shuffled_clips.append(clip)
-        available_clips.pop(clip_idx)
-    
-    # Write concat file
-    with open(concat_file, 'w', encoding='utf-8') as f:
-        for clip in shuffled_clips:
-            f.write(f"file '{clip}'\n")
-    
-    log(f"📝 Created optimized concat file with {len(shuffled_clips)} clips (shuffled for variety)")
-    return concat_file
-
-
-def verify_manifest_integrity(manifest_path: Path, clips_path: Path) -> tuple:
-    """
-    Verify all clips in manifest exist and are valid
-    Returns (valid_clips_list, total_duration, is_valid)
-    """
-    if not manifest_path.exists():
-        log(f"❌ Manifest file not found: {manifest_path}", "ERROR")
-        return [], 0.0, False
-    
-    try:
-        with open(manifest_path, 'r', encoding='utf-8') as f:
-            manifest = json.load(f)
-        
-        clips = manifest.get('clips', [])
-        audio_authority_target = manifest.get('audio_authority_target', manifest.get('target_duration', 0))
-        
-        log(f"🔍 Verifying manifest integrity: {len(clips)} clips, audio authority target: {audio_authority_target:.1f}s")
-        
-        valid_clips = []
-        total_duration = 0.0
-        
-        for clip in clips:
-            # Get clip path
-            clip_path = None
-            if 'filename' in clip:
-                clip_path = clips_path / clip['filename']
-            elif 'file' in clip:
-                clip_path = Path(clip['file'])
-            
-            if not clip_path or not clip_path.exists():
-                log(f"❌ Clip missing from disk: {clip.get('filename', 'unknown')}", "ERROR")
-                return [], 0.0, False
-            
-            if not validate_clip_for_use(clip_path):
-                log(f"❌ Clip corrupted or unreadable: {clip_path.name}", "ERROR")
-                return [], 0.0, False
-            
-            duration = clip.get('duration', 0)
-            if duration <= 0:
-                duration = get_clip_duration(clip_path)
-            
-            valid_clips.append(str(clip_path.absolute()))
-            total_duration += duration
-        
-        log(f"📊 Verified {len(valid_clips)} valid clips, total duration: {total_duration:.1f}s")
-        
-        return valid_clips, total_duration, True
-        
-    except Exception as e:
-        log(f"❌ Failed to verify manifest: {e}", "ERROR")
-        return [], 0.0, False
-
-
-# ============================================================================
 # ENHANCED SHORTS VIDEO EDITING WITH HARD SUBTITLES AND AUDIO - NO BLACK FALLBACK
 # ============================================================================
 
@@ -1049,24 +1097,24 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     log(f"   Total after {loop_count} loops: {total_clips_duration * loop_count:.1f}s")
     
     # Create optimized concat file with shuffled clips
+    # FIXED: This now properly loops until target duration is met
     concat_file = create_optimized_concat_file(valid_clips, output_dir, run_id, target_duration)
     
     # Base FFmpeg command for concatenated clips
-    # Note: This is just assembly, final encoding happens in render step
+    # FIXED: REMOVED -shortest flag which was causing frame duplication
+    # The system now guarantees concat duration >= target_duration, so -shortest is unnecessary
     cmd = [
         'ffmpeg', '-y',
-        '-fflags', '+genpts',  # Regenerate timestamps
-        '-threads', '0',        # Optimal CPU utilization
-        '-f', 'concat', '-safe', '0', '-i', str(concat_file),
+        '-fflags', '+genpts',
+        '-threads', '0',
+        '-f', 'concat',
+        '-safe', '0',
+        '-i', str(concat_file),
         '-i', audio_file,
-        '-c:v', 'libx264', '-preset', 'medium',
-        '-crf', '18',  # Ensure high quality even in assembly
-        '-c:a', 'aac', '-b:a', '192k',
-        '-shortest',
-        '-pix_fmt', 'yuv420p',
-        '-r', '30',
-        # Scale to shorts resolution with cropping to fill frame
-        '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p',
+        '-c:v', 'copy',  # No re-encode for assembly
+        '-c:a', 'aac',
+        '-b:a', '192k',
+        # REMOVED: '-shortest' - concat already guarantees sufficient duration
         str(assembled_video)
     ]
     
@@ -1609,10 +1657,12 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     log(f"   Total after {loop_count} loops: {total_clips_duration * loop_count:.1f}s")
     
     # Create optimized concat file with shuffled clips
+    # FIXED: This now properly loops until target duration is met
     concat_file = create_optimized_concat_file(valid_clips, output_dir, run_id, target_duration)
     
     # Base FFmpeg command for concatenated clips
-    # Note: This is just assembly, final encoding happens in render step
+    # FIXED: REMOVED -shortest flag which was causing frame duplication
+    # The system now guarantees concat duration >= target_duration, so -shortest is unnecessary
     cmd = [
         'ffmpeg', '-y',
         '-fflags', '+genpts',  # Regenerate timestamps
@@ -1622,7 +1672,7 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
         '-c:v', 'libx264', '-preset', 'medium',
         '-crf', '18',  # Ensure high quality even in assembly
         '-c:a', 'aac', '-b:a', '192k',
-        '-shortest',
+        # REMOVED: '-shortest' - concat already guarantees sufficient duration
         '-pix_fmt', 'yuv420p',
         '-r', '30',
         # Scale to 1080p with cropping to fill frame
@@ -1982,6 +2032,7 @@ def main():
     log(f"   FFMPEG PROGRESS: LIVE OUTPUT ENABLED (no more freezing)")
     log(f"   FFMPEG TIMEOUTS: Shorts=45min, Long=75min (safe limits)")
     log(f"   SUBTITLE FILTER: Pure SRT input, absolute paths, proper escaping")
+    log(f"   CONCAT FIX: Dynamic looping ensures duration >= target, removed -shortest")
     log("=" * 80)
     
     # Step 1: Dynamically find audio file if not specified
@@ -2039,6 +2090,7 @@ def main():
         log(f"   AUDIO merged successfully - NO SILENT VIDEOS")
         log(f"   FFMPEG FIXES applied - live progress shown, no freezing, correct timeouts")
         log(f"   SUBTITLE FILTER: Pure SRT input, absolute paths, proper escaping")
+        log(f"   CONCAT GENERATION FIXED: Dynamic looping ensures proper duration")
         sys.exit(0)
     else:
         log(f"❌ FATAL: {args.type.upper()} video creation failed - no video generated")
