@@ -11,7 +11,7 @@ FIXED: Audio is now properly merged into final videos (CRITICAL BUG FIX)
 FIXED: Devanagari font rendering - Now uses explicit font file for proper ligatures
 FIXED: Video encoding quality - Now enforces consistent HD resolution with CRF 18
 FIXED: FFmpeg execution - Added live progress output, proper timeouts, and timestamp regeneration
-FIXED: Subtitle filter - Added charenc=UTF-8 to fix Hindi Unicode subtitle rendering on GitHub Actions
+FIXED: Subtitle filter - Pure SRT input, absolute paths, proper escaping
 """
 import os
 import json
@@ -502,6 +502,12 @@ def render_video_with_hard_subtitles(
     - Resolution normalised to target HD dimensions
     - Audio preserved losslessly via stream copy
 
+    SUBTITLE FILTER:
+    - Pure SRT input (no ASS headers)
+    - Absolute paths with proper escaping
+    - fontsdir parameter for font lookup
+    - charenc=UTF-8 for Unicode support
+
     Args:
         input_video: Path to assembled input video (ALREADY contains audio)
         output_video: Path to output video
@@ -523,9 +529,17 @@ def render_video_with_hard_subtitles(
     log(f"   QUALITY SETTINGS: CRF 18, preset medium, forced HD resolution")
     log(f"   FFMPEG FIXES: +genpts (timestamp regeneration), threads 0 (optimal CPU)")
 
-    # Verify subtitle file exists
+    # ============================================================================
+    # VALIDATION - CRITICAL PRE-FLIGHT CHECKS
+    # ============================================================================
+    
+    # Verify subtitle file exists and is non-empty
     if not subtitles_srt.exists():
         log(f"❌ Subtitle file not found: {subtitles_srt}")
+        return False
+    
+    if subtitles_srt.stat().st_size == 0:
+        log(f"❌ Subtitle file is empty: {subtitles_srt}")
         return False
 
     # Verify input video exists and is non-empty
@@ -534,17 +548,26 @@ def render_video_with_hard_subtitles(
         return False
 
     # Verify font file exists
-    font_path = Path(FONT_DIR) / f"{FONT_NAME}.ttf"
+    font_path = Path(FONT_DIR).resolve() / f"{FONT_NAME}.ttf"
     if not font_path.exists():
-        log(f"⚠️ Font file not found at: {font_path}", "WARNING")
-        log(f"   Using system font fallback - ligatures may render incorrectly!", "WARNING")
+        error_msg = f"❌ FATAL: Font file not found at: {font_path}"
+        log(error_msg, "ERROR")
+        return False
     else:
         log(f"✅ Font file verified: {font_path}")
 
+    # ============================================================================
+    # DEBUG LOGGING
+    # ============================================================================
+    log(f"🔍 DEBUG: Subtitle file exists: {subtitles_srt.exists()}, size: {subtitles_srt.stat().st_size} bytes")
+    log(f"🔍 DEBUG: Font exists: {font_path.exists()}")
+    
+    # ============================================================================
     # FIX: Set fontconfig to use a WRITABLE cache directory inside the workspace.
     # The root cause of "Operation not permitted" is libass trying to write font cache
     # to /usr/share/fonts which is read-only in GitHub Actions sandbox.
     # Solution: redirect font cache to a temp dir we own.
+    # ============================================================================
     fontconfig_cache_dir = Path(tempfile.mkdtemp(prefix="fontconfig_cache_"))
     os.environ["FONTCONFIG_PATH"] = "/etc/fonts"
     os.environ["FONTCONFIG_FILE"] = "/etc/fonts/fonts.conf"
@@ -552,23 +575,25 @@ def render_video_with_hard_subtitles(
     os.environ["FC_CACHE_DIR"] = str(fontconfig_cache_dir)
     log(f"✅ Fontconfig cache redirected to writable dir: {fontconfig_cache_dir}")
 
-    # Build subtitle filter with absolute paths using correct FFmpeg syntax
-    # FIX: Using proper subtitles filter syntax: filename=, fontsdir=, charenc=
-    # CRITICAL: Use absolute paths to ensure FFmpeg finds the files
-    subtitles_path = subtitles_srt.resolve()
-    fonts_path = Path(FONT_DIR).resolve()
+    # ============================================================================
+    # Build subtitle filter with absolute paths - PURE SRT INPUT
+    # ============================================================================
+    fonts_dir = Path(FONT_DIR).resolve()
+    subtitle_file = subtitles_srt.resolve()
     
-    # Escape apostrophes in paths for filter syntax
-    subtitles_path_escaped = str(subtitles_path).replace("'", "'\\''")
-    fonts_path_escaped = str(fonts_path).replace("'", "'\\''")
+    # Escape paths for filter syntax
+    fonts_escaped = str(fonts_dir).replace("\\", "/").replace(":", "\\:")
+    subtitle_escaped = str(subtitle_file).replace("\\", "/").replace(":", "\\:")
     
     subtitle_filter = (
-        f"subtitles=filename='{subtitles_path_escaped}':"
-        f"fontsdir='{fonts_path_escaped}':"
+        f"subtitles=filename='{subtitle_escaped}':"
+        f"fontsdir='{fonts_escaped}':"
         f"charenc=UTF-8"
     )
     
     log(f"✅ Using subtitle filter: {subtitle_filter}")
+    log(f"🔍 DEBUG: Subtitle file path: {subtitle_escaped}")
+    log(f"🔍 DEBUG: Fonts dir path: {fonts_escaped}")
 
     # Determine resolution based on video type
     if video_type == "short":
@@ -582,9 +607,8 @@ def render_video_with_hard_subtitles(
         f",crop={target_width}:{target_height}"
     )
 
-    # Filter chain: scale → subtitles
-    # Note: format=yuv420p is handled by -pix_fmt flag to avoid filter-chain conflicts
-    vf_filter = f"{scale_filter},{subtitle_filter}"
+    # Filter chain: scale → format → subtitles
+    vf_filter = f"{scale_filter},format=yuv420p,{subtitle_filter}"
 
     log(f"Using video filter chain: {vf_filter}")
 
@@ -600,7 +624,7 @@ def render_video_with_hard_subtitles(
         '-fflags', '+genpts',       # Regenerate timestamps (prevents subtitle filter crashes)
         '-threads', '0',             # Optimal CPU utilisation
         '-i', str(input_video),      # SINGLE INPUT — already contains audio
-        '-vf', vf_filter,            # Scale + burn subtitles
+        '-vf', vf_filter,            # Scale → format → burn subtitles
         '-c:v', 'libx264',           # Re-encode video to burn in subtitles
         '-preset', 'medium',
         '-crf', '18',                # Visually lossless
@@ -1280,7 +1304,7 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
                 
                 if hook_text:
                     overlay_filters.append(
-                        f"drawtext=fontfile={FONT_DIR}/{FONT_NAME}.ttf:"
+                        f"drawtext=fontfile={font_path}:"
                         f"text='{hook_text}':"
                         "fontcolor=yellow:"
                         "fontsize=72:"
@@ -1304,7 +1328,7 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
                 if cta_text:
                     cta_start = max(0, duration - 5)
                     overlay_filters.append(
-                        f"drawtext=fontfile={FONT_DIR}/{FONT_NAME}.ttf:"
+                        f"drawtext=fontfile={font_path}:"
                         f"text='{cta_text}':"
                         "fontcolor=white:"
                         "fontsize=60:"
@@ -1957,7 +1981,7 @@ def main():
     log(f"   FFMPEG FIXES: +genpts (timestamp regeneration), threads 0 (optimal CPU)")
     log(f"   FFMPEG PROGRESS: LIVE OUTPUT ENABLED (no more freezing)")
     log(f"   FFMPEG TIMEOUTS: Shorts=45min, Long=75min (safe limits)")
-    log(f"   SUBTITLE FIX: Removed unsupported parameters for GitHub Actions compatibility")
+    log(f"   SUBTITLE FILTER: Pure SRT input, absolute paths, proper escaping")
     log("=" * 80)
     
     # Step 1: Dynamically find audio file if not specified
@@ -2014,7 +2038,7 @@ def main():
         log(f"   Devanagari ligatures rendered properly (क्या, not क् या)")
         log(f"   AUDIO merged successfully - NO SILENT VIDEOS")
         log(f"   FFMPEG FIXES applied - live progress shown, no freezing, correct timeouts")
-        log(f"   SUBTITLE FIX: Removed unsupported parameters - GitHub Actions compatibility fixed")
+        log(f"   SUBTITLE FILTER: Pure SRT input, absolute paths, proper escaping")
         sys.exit(0)
     else:
         log(f"❌ FATAL: {args.type.upper()} video creation failed - no video generated")
