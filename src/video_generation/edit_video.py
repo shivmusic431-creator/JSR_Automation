@@ -307,7 +307,7 @@ def enforce_audio_duration_authority(video_path: Path, audio_file: str) -> Path:
 
 # Font configuration for proper Devanagari rendering
 FONT_DIR = "assets/fonts"
-FONT_NAME = "NotoSansDevanagari-Regular"
+FONT_NAME = "Mukta-Regular.ttf"
 SUBTITLE_FONT = FONT_NAME  # Keep for backward compatibility
 SUBTITLE_FONTSIZE = 28
 SUBTITLE_PRIMARY_COLOR = "&Hffffff&"  # White
