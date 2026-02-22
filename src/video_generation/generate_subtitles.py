@@ -13,8 +13,7 @@ Features:
 - 3x faster generation - No audio processing
 - Memory efficient (handles 30+ minute videos)
 - CI/CD safe with heartbeat logging
-- FIXED: Proper Devanagari font support with explicit font styling
-- FIXED: Perfect subtitle timing using character-weighted distribution for accurate XTTS alignment
+- PURE SRT FORMAT - No ASS headers, no embedded font references
 """
 import os
 import sys
@@ -108,17 +107,6 @@ def find_latest_audio_file(output_dir="output", video_type="long"):
 
 OUTPUT_SRT = Path("output/subtitles.srt")
 HEARTBEAT_INTERVAL = 10  # Log progress every 10 seconds
-
-# ASS/SSA style configuration for proper Devanagari rendering
-# This ensures the subtitles file itself has the font information
-ASS_STYLE = """
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Mukta-Regular.ttf,28,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,1,2,10,10,10,1
-"""
-
-# Center alignment marker for SRT ({\an5} centers text)
-CENTER_ALIGN = "{\\an5}"
 
 
 # ============================================================================
@@ -454,12 +442,13 @@ def combine_word_timings_for_subtitles(
 
 
 # ============================================================================
-# TIMESTAMP FORMATTING (FRAME-LEVEL PRECISION)
+# TIMESTAMP FORMATTING (SRT STANDARD - NO ASS)
 # ============================================================================
 
-def format_timestamp(seconds: float) -> str:
+def format_srt_time(seconds: float) -> str:
     """
     Convert seconds to SRT timestamp format with millisecond precision.
+    PURE SRT FORMAT - No ASS extensions.
     
     Args:
         seconds: Time in seconds (high precision)
@@ -467,17 +456,16 @@ def format_timestamp(seconds: float) -> str:
     Returns:
         Formatted timestamp string (HH:MM:SS,mmm)
     """
-    td = timedelta(seconds=seconds)
-    hours = td.seconds // 3600
-    minutes = (td.seconds % 3600) // 60
-    seconds = td.seconds % 60
-    milliseconds = td.microseconds // 1000
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    millis = int((seconds - int(seconds)) * 1000)
     
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
+    return f"{hours:02}:{minutes:02}:{secs:02},{millis:03}"
 
 
 # ============================================================================
-# SUBTITLE GENERATION (PROFESSIONAL GRADE) - AUDIO DURATION AUTHORITY
+# SUBTITLE GENERATION (PROFESSIONAL GRADE) - PURE SRT FORMAT
 # ============================================================================
 
 def generate_subtitles_from_script(
@@ -494,7 +482,7 @@ def generate_subtitles_from_script(
     - CLEAN TEXT: No emotion indicators or scene markers
     - OPTIMAL READABILITY: 3-6 words per subtitle
     - AUDIO DURATION AUTHORITY: Uses ACTUAL audio duration from ffprobe
-    - PROPER DEVANAGARI RENDERING: Includes font styling in SRT
+    - PURE SRT FORMAT: No ASS headers, no embedded font references
     
     Args:
         script_data: Script data dictionary with chunks
@@ -511,7 +499,7 @@ def generate_subtitles_from_script(
     log("⚡ CLEAN TEXT - No emotion indicators or scene markers")
     log("⚡ OPTIMAL READABILITY - 3-6 words per subtitle")
     log("⚡ PERFECT SYNC - Frame-level precision with AUDIO AUTHORITY")
-    log("⚡ DEVANAGARI FONT SUPPORT - Mukta-Regular.ttf for proper ligatures")
+    log("⚡ PURE SRT FORMAT - No ASS headers, no font references")
     log(f"⚡ AUDIO AUTHORITY duration: {audio_duration:.6f}s")
     log("=" * 80)
     
@@ -578,8 +566,8 @@ def generate_subtitles_from_script(
     log(f"   Total subtitles: {len(subtitle_timings)}")
     log(f"   Avg subtitle duration: {audio_duration/len(subtitle_timings):.3f}s")
     
-    # Step 8: Write subtitles with center alignment and font styling
-    log(f"📝 Writing {len(subtitles)} subtitles to {output_path}")
+    # Step 8: Write pure SRT subtitles - NO ASS HEADERS, NO FONT REFERENCES
+    log(f"📝 Writing {len(subtitles)} pure SRT subtitles to {output_path}")
     
     # Ensure output directory exists
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -589,15 +577,11 @@ def generate_subtitles_from_script(
     
     try:
         with open(output_path, 'w', encoding='utf-8') as f:
-            # Write ASS style header for proper font rendering
-            # This tells the renderer to use Mukta-Regular.ttf
-            f.write(ASS_STYLE)
-            
             for idx, (subtitle, (start_time, end_time)) in enumerate(zip(subtitles, subtitle_timings), 1):
-                # Write subtitle entry with center alignment
+                # Write pure SRT entry - NO alignment markers, NO ASS styling
                 f.write(f"{idx}\n")
-                f.write(f"{format_timestamp(start_time)} --> {format_timestamp(end_time)}\n")
-                f.write(f"{CENTER_ALIGN}{subtitle}\n\n")
+                f.write(f"{format_srt_time(start_time)} --> {format_srt_time(end_time)}\n")
+                f.write(f"{subtitle}\n\n")
                 
                 # Heartbeat logging for long videos
                 if time.time() - last_heartbeat > HEARTBEAT_INTERVAL:
@@ -610,31 +594,27 @@ def generate_subtitles_from_script(
             # Read and validate output
             with open(output_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-                actual_count = content.count('\n\n')
+                line_count = len(content.strip().split('\n'))
             
             log("=" * 80)
             log("✅ PROFESSIONAL SUBTITLE GENERATION COMPLETE")
             log("=" * 80)
             log(f"   Output file: {output_path}")
-            log(f"   Subtitles written: {actual_count}")
+            log(f"   Subtitles written: {len(subtitles)}")
             log(f"   AUDIO AUTHORITY duration: {audio_duration:.6f}s")
             log(f"   Total words: {total_words}")
             log(f"   Total weighted characters: {total_chars}")
-            log(f"   Words per subtitle: {total_words/actual_count:.1f}")
-            log(f"   Average duration: {audio_duration/actual_count:.3f}s")
+            log(f"   Words per subtitle: {total_words/len(subtitles):.1f}")
+            log(f"   Average duration: {audio_duration/len(subtitles):.3f}s")
             log(f"   File size: {output_path.stat().st_size / 1024:.2f} KB")
+            log(f"   Format: PURE SRT (no ASS headers, no font references)")
             
-            # Verify center alignment
-            if CENTER_ALIGN in content:
-                log(f"✅ Center alignment marker verified")
+            # Verify no ASS headers present
+            if "[V4+ Styles]" not in content and "Style:" not in content:
+                log(f"✅ PURE SRT format verified - no ASS headers")
             else:
-                log(f"⚠️ WARNING: Center alignment marker missing")
-            
-            # Verify font styling
-            if "Mukta-Regular.ttf" in content:
-                log(f"✅ Devanagari font styling verified")
-            else:
-                log(f"⚠️ WARNING: Font styling missing - ligatures may render incorrectly")
+                log(f"❌ ERROR: ASS headers detected in output")
+                return False
             
             # Verify no metadata in output
             metadata_chars = sum(content.count(c) for c in '()[]')
@@ -662,7 +642,7 @@ def generate_subtitles_from_script(
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Generate professional subtitles from script (NO speech recognition) - AUDIO DURATION AUTHORITY'
+        description='Generate professional subtitles from script (NO speech recognition) - AUDIO DURATION AUTHORITY - PURE SRT FORMAT'
     )
     parser.add_argument('--run-id', required=True, help='Run ID for logging')
     parser.add_argument('--force', action='store_true', 
@@ -682,7 +662,7 @@ def main():
     log(f"📝 PROFESSIONAL SUBTITLE GENERATION - Run ID: {args.run_id}")
     log(f"   AUDIO DURATION AUTHORITY: ENABLED")
     log(f"   CHARACTER-WEIGHTED TIMING: ENABLED (perfect XTTS sync)")
-    log(f"   DEVANAGARI FONT: Mukta-Regular.ttf (for proper ligatures)")
+    log(f"   PURE SRT FORMAT: ENABLED (no ASS headers, no font references)")
     log("=" * 80)
     
     start_time = time.time()
@@ -740,7 +720,7 @@ def main():
         log(f"   AUDIO AUTHORITY duration: {audio_duration:.6f}s")
         log(f"   Generation time: {elapsed_time:.2f}s")
         log(f"   Speed: {audio_duration/elapsed_time:.1f}x realtime")
-        log(f"   Font styling: Mukta-Regular.ttf embedded in SRT")
+        log(f"   Format: PURE SRT (no ASS headers, no font references)")
         log("=" * 80)
         sys.exit(0)
     else:
