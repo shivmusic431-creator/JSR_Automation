@@ -511,7 +511,7 @@ def generate_subtitles_from_script(
     log("⚡ CLEAN TEXT - No emotion indicators or scene markers")
     log("⚡ OPTIMAL READABILITY - 3-6 words per subtitle")
     log("⚡ PERFECT SYNC - Frame-level precision with AUDIO AUTHORITY")
-    log("⚡ DEVANAGARI FONT SUPPORT - NotoSansDevanagari-Regular for proper ligatures")
+    log("⚡ DEVANAGARI FONT SUPPORT - Mukta-Regular.ttf for proper ligatures")
     log(f"⚡ AUDIO AUTHORITY duration: {audio_duration:.6f}s")
     log("=" * 80)
     
@@ -590,7 +590,7 @@ def generate_subtitles_from_script(
     try:
         with open(output_path, 'w', encoding='utf-8') as f:
             # Write ASS style header for proper font rendering
-            # This tells the renderer to use NotoSansDevanagari-Regular
+            # This tells the renderer to use Mukta-Regular.ttf
             f.write(ASS_STYLE)
             
             for idx, (subtitle, (start_time, end_time)) in enumerate(zip(subtitles, subtitle_timings), 1):
@@ -631,7 +631,7 @@ def generate_subtitles_from_script(
                 log(f"⚠️ WARNING: Center alignment marker missing")
             
             # Verify font styling
-            if "NotoSansDevanagari-Regular" in content:
+            if "Mukta-Regular.ttf" in content:
                 log(f"✅ Devanagari font styling verified")
             else:
                 log(f"⚠️ WARNING: Font styling missing - ligatures may render incorrectly")
@@ -682,7 +682,7 @@ def main():
     log(f"📝 PROFESSIONAL SUBTITLE GENERATION - Run ID: {args.run_id}")
     log(f"   AUDIO DURATION AUTHORITY: ENABLED")
     log(f"   CHARACTER-WEIGHTED TIMING: ENABLED (perfect XTTS sync)")
-    log(f"   DEVANAGARI FONT: NotoSansDevanagari-Regular (for proper ligatures)")
+    log(f"   DEVANAGARI FONT: Mukta-Regular.ttf (for proper ligatures)")
     log("=" * 80)
     
     start_time = time.time()
@@ -740,7 +740,7 @@ def main():
         log(f"   AUDIO AUTHORITY duration: {audio_duration:.6f}s")
         log(f"   Generation time: {elapsed_time:.2f}s")
         log(f"   Speed: {audio_duration/elapsed_time:.1f}x realtime")
-        log(f"   Font styling: NotoSansDevanagari-Regular embedded in SRT")
+        log(f"   Font styling: Mukta-Regular.ttf embedded in SRT")
         log("=" * 80)
         sys.exit(0)
     else:
