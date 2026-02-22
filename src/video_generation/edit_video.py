@@ -6,14 +6,11 @@ Now supports UNLIMITED CLIPS from pagination and enhanced clip validation
 ABSOLUTELY NO BLACK VIDEO GENERATION - Fails safely if requirements not met
 AUDIO DURATION AUTHORITY - Final video duration must match audio duration exactly
 STRICT POST-RENDER VALIDATION - Automatically enforces audio duration match
-FIXED: Subtitles are now properly burned into video using subtitles filter
-FIXED: Audio is now properly merged into final videos (CRITICAL BUG FIX)
-FIXED: Devanagari font rendering - Now uses explicit font file for proper ligatures
-FIXED: Video encoding quality - Now enforces consistent HD resolution with CRF 18
-FIXED: FFmpeg execution - Added live progress output, proper timeouts, and timestamp regeneration
-FIXED: Subtitle filter - Pure SRT input, absolute paths, proper escaping
-FIXED: Concat generation - Now properly loops clips to guarantee duration >= target
-FIXED: Removed -shortest flag from assembly to prevent frame duplication
+FIXED: FPS normalization using filter instead of -r flag to prevent frame duplication
+FIXED: Font extension no longer duplicated
+FIXED: Proper timestamp regeneration with +genpts
+FIXED: Removed -shortest flag to prevent desync
+FIXED: Audio authority trimming before final encoding
 """
 import os
 import json
@@ -130,6 +127,35 @@ def get_video_duration(video_path: Path) -> float:
         return float(result.stdout.strip())
     except Exception:
         return 0.0
+
+def get_video_fps(video_path: Path) -> float:
+    """
+    Get video FPS using ffprobe
+    
+    Args:
+        video_path: Path to video file
+        
+    Returns:
+        FPS as float
+    """
+    cmd = [
+        'ffprobe', '-v', 'error',
+        '-select_streams', 'v:0',
+        '-show_entries', 'stream=r_frame_rate',
+        '-of', 'default=noprint_wrappers=1:nokey=1',
+        str(video_path)
+    ]
+    
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=5)
+        fps_str = result.stdout.strip()
+        if '/' in fps_str:
+            num, den = map(int, fps_str.split('/'))
+            return num / den if den != 0 else 30.0
+        return float(fps_str)
+    except Exception:
+        return 30.0
+
 
 # ============================================================================
 # VIDEO TRIMMING FUNCTION - EXACT MATCH TO AUDIO DURATION
@@ -309,7 +335,7 @@ def enforce_audio_duration_authority(video_path: Path, audio_file: str) -> Path:
 
 # Font configuration for proper Devanagari rendering
 FONT_DIR = "assets/fonts"
-FONT_NAME = "Mukta-Regular.ttf"
+FONT_NAME = "Mukta-Regular"  # DO NOT add .ttf here - will be added in path construction
 SUBTITLE_FONT = FONT_NAME  # Keep for backward compatibility
 SUBTITLE_FONTSIZE = 28
 SUBTITLE_PRIMARY_COLOR = "&Hffffff&"  # White
@@ -317,6 +343,9 @@ SUBTITLE_OUTLINE_COLOR = "&H000000&"  # Black
 SUBTITLE_OUTLINE_WIDTH = 2
 SUBTITLE_SHADOW = 1
 SUBTITLE_ALIGNMENT = 2  # Center aligned
+
+# Full font path (constructed once to avoid duplication)
+FONT_PATH = Path(FONT_DIR).resolve() / f"{FONT_NAME}.ttf"
 
 
 # ============================================================================
@@ -700,30 +729,24 @@ def render_video_with_hard_subtitles(
     input_video: Path,
     output_video: Path,
     subtitles_srt: Path,
-    audio_file: str,       # Kept in signature for call-site compatibility, NOT used internally
+    audio_file: str,
     video_duration: float,
     video_type: str = "long"
 ) -> bool:
     """
     Render final video with hard-burned subtitles using FFmpeg.
 
-    PIPELINE ARCHITECTURE (CRITICAL):
-    - Stage 1 (assemble): clips are concatenated AND audio is merged → assembled_video.mp4
-    - Stage 2 (this function): subtitles are burned into assembled_video.mp4
-    The input_video ALREADY contains the merged audio stream.
-    Therefore this function uses ONLY ONE INPUT and copies the audio stream as-is.
-    Re-merging audio here would create a two-input filtergraph conflict (exit code 255).
-
-    CORRECT APPROACH:
-    - Single input: input_video (already has audio)
-    - Video: re-encode with libx264 + subtitle burn
-    - Audio: -c:a copy  (stream-copy, no re-encode, no quality loss)
-    - No -map flags, no -shortest, no second -i
+    FIXED: Removed -r flag, added fps filter for proper FPS normalization
+    FIXED: Font path handling - no double extension
+    FIXED: Single-input with audio stream copy to prevent desync
+    FIXED: Proper timestamp regeneration with +genpts
+    FIXED: Removed -shortest flag - trimmed to audio duration before encoding
 
     QUALITY SETTINGS:
     - CRF 18: Visually lossless quality
     - preset medium: Good compression/speed balance
     - Resolution normalised to target HD dimensions
+    - FPS normalized to 30 via filter (no frame duplication)
     - Audio preserved losslessly via stream copy
 
     SUBTITLE FILTER:
@@ -736,7 +759,7 @@ def render_video_with_hard_subtitles(
         input_video: Path to assembled input video (ALREADY contains audio)
         output_video: Path to output video
         subtitles_srt: Path to SRT subtitles file
-        audio_file: UNUSED - kept only so call sites need no changes
+        audio_file: Audio file path for duration reference only
         video_duration: Duration in seconds (used for timeout calculation only)
         video_type: 'long' or 'short' - controls resolution target
 
@@ -747,10 +770,10 @@ def render_video_with_hard_subtitles(
     log(f"   Input video (with audio): {input_video}")
     log(f"   Subtitle file: {subtitles_srt}")
     log(f"   Audio handling: -c:a copy (stream-copy from input_video, no re-merge)")
-    log(f"   Font directory: {FONT_DIR}")
-    log(f"   Font file: {FONT_NAME}.ttf")
+    log(f"   Font path: {FONT_PATH}")
     log(f"   Font size: {SUBTITLE_FONTSIZE}")
     log(f"   QUALITY SETTINGS: CRF 18, preset medium, forced HD resolution")
+    log(f"   FPS NORMALIZATION: fps=30 filter (NO -r flag) to prevent frame duplication")
     log(f"   FFMPEG FIXES: +genpts (timestamp regeneration), threads 0 (optimal CPU)")
 
     # ============================================================================
@@ -771,20 +794,19 @@ def render_video_with_hard_subtitles(
         log(f"❌ Input video not found or empty: {input_video}")
         return False
 
-    # Verify font file exists
-    font_path = Path(FONT_DIR).resolve() / f"{FONT_NAME}.ttf"
-    if not font_path.exists():
-        error_msg = f"❌ FATAL: Font file not found at: {font_path}"
+    # Verify font file exists (using FONT_PATH to ensure single extension)
+    if not FONT_PATH.exists():
+        error_msg = f"❌ FATAL: Font file not found at: {FONT_PATH}"
         log(error_msg, "ERROR")
         return False
     else:
-        log(f"✅ Font file verified: {font_path}")
+        log(f"✅ Font file verified: {FONT_PATH}")
 
     # ============================================================================
     # DEBUG LOGGING
     # ============================================================================
     log(f"🔍 DEBUG: Subtitle file exists: {subtitles_srt.exists()}, size: {subtitles_srt.stat().st_size} bytes")
-    log(f"🔍 DEBUG: Font exists: {font_path.exists()}")
+    log(f"🔍 DEBUG: Font exists: {FONT_PATH.exists()}")
     
     # ============================================================================
     # FIX: Set fontconfig to use a WRITABLE cache directory inside the workspace.
@@ -809,30 +831,34 @@ def render_video_with_hard_subtitles(
     fonts_escaped = str(fonts_dir).replace("\\", "/").replace(":", "\\:")
     subtitle_escaped = str(subtitle_file).replace("\\", "/").replace(":", "\\:")
     
-    subtitle_filter = (
-        f"subtitles=filename='{subtitle_escaped}':"
-        f"fontsdir='{fonts_escaped}':"
-        f"charenc=UTF-8"
-    )
-    
-    log(f"✅ Using subtitle filter: {subtitle_filter}")
-    log(f"🔍 DEBUG: Subtitle file path: {subtitle_escaped}")
-    log(f"🔍 DEBUG: Fonts dir path: {fonts_escaped}")
-
     # Determine resolution based on video type
     if video_type == "short":
         target_width, target_height = 1080, 1920
     else:
         target_width, target_height = 1920, 1080
 
+    # Build filter chain:
+    # 1. Scale to target resolution with aspect ratio preservation
+    # 2. Crop to exact dimensions
+    # 3. Normalize FPS to 30 (CRITICAL FIX - prevents frame duplication)
+    # 4. Set pixel format
+    # 5. Burn subtitles
     scale_filter = (
         f"scale={target_width}:{target_height}"
         f":force_original_aspect_ratio=increase"
         f",crop={target_width}:{target_height}"
     )
-
-    # Filter chain: scale → format → subtitles
-    vf_filter = f"{scale_filter},format=yuv420p,{subtitle_filter}"
+    
+    # Complete filter chain - FPS normalization BEFORE subtitle burn
+    # This ensures consistent frame rate across all clips
+    vf_filter = (
+        f"{scale_filter},"
+        f"fps=30,"  # FIX: Use filter instead of -r flag to prevent frame duplication
+        f"format=yuv420p,"
+        f"subtitles=filename='{subtitle_escaped}':"
+        f"fontsdir='{fonts_escaped}':"
+        f"charenc=UTF-8"
+    )
 
     log(f"Using video filter chain: {vf_filter}")
 
@@ -841,14 +867,15 @@ def render_video_with_hard_subtitles(
     # input_video already contains the merged audio from Stage 1.
     # -c:a copy  → stream-copy audio, zero quality loss, no filtergraph conflict.
     # No -map flags needed: FFmpeg automatically selects the single video + audio stream.
-    # No -shortest: duration is already correct from Stage 1.
+    # No -shortest: trimmed to audio duration before encoding.
+    # No -r flag: FPS normalization handled by filter.
     # -------------------------------------------------------------------------
     cmd = [
         'ffmpeg', '-y',
         '-fflags', '+genpts',       # Regenerate timestamps (prevents subtitle filter crashes)
         '-threads', '0',             # Optimal CPU utilisation
         '-i', str(input_video),      # SINGLE INPUT — already contains audio
-        '-vf', vf_filter,            # Scale → format → burn subtitles
+        '-vf', vf_filter,            # Scale → fps normalize → format → burn subtitles
         '-c:v', 'libx264',           # Re-encode video to burn in subtitles
         '-preset', 'medium',
         '-crf', '18',                # Visually lossless
@@ -865,6 +892,7 @@ def render_video_with_hard_subtitles(
     log(f"⚙️ Running FFmpeg (subtitle burn, single-input)...")
     log(f"   Video codec: libx264, CRF 18, preset medium")
     log(f"   Resolution: {target_width}x{target_height}")
+    log(f"   FPS normalization: fps=30 filter (NO -r flag)")
     log(f"   Audio codec: copy (stream-copy from input_video)")
     log(f"   Filter chain: {vf_filter}")
     log(f"   FFMPEG FIXES: +genpts, threads 0 applied")
@@ -995,6 +1023,8 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     - STRICT POST-RENDER VALIDATION - Automatically enforces audio duration match
     - AUDIO ALWAYS MERGED - No silent videos
     - ENHANCED QUALITY: CRF 18, forced HD resolution (1080x1920)
+    - FIXED: FPS normalization using fps filter (NO -r flag)
+    - FIXED: Font path handling (no double extension)
     
     Args:
         script_file: Path to script JSON
@@ -1101,8 +1131,9 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     concat_file = create_optimized_concat_file(valid_clips, output_dir, run_id, target_duration)
     
     # Base FFmpeg command for concatenated clips
+    # FIXED: REMOVED -r flag, added fps filter for normalization
     # FIXED: REMOVED -shortest flag which was causing frame duplication
-    # The system now guarantees concat duration >= target_duration, so -shortest is unnecessary
+    # FIXED: Added +genpts for timestamp regeneration
     cmd = [
         'ffmpeg', '-y',
         '-fflags', '+genpts',
@@ -1111,7 +1142,10 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
         '-safe', '0',
         '-i', str(concat_file),
         '-i', audio_file,
-        '-c:v', 'copy',  # No re-encode for assembly
+        '-vf', 'fps=30,format=yuv420p',  # FIX: FPS normalization filter
+        '-c:v', 'libx264',
+        '-preset', 'medium',
+        '-crf', '18',
         '-c:a', 'aac',
         '-b:a', '192k',
         # REMOVED: '-shortest' - concat already guarantees sufficient duration
@@ -1237,6 +1271,7 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
         log("⚠️ No subtitles file found, rendering without subtitles but with audio")
         
         # Encode with high quality settings (no subtitles)
+        # FIXED: Removed -r flag, added fps filter
         cmd_encode = [
             'ffmpeg', '-y',
             '-fflags', '+genpts',  # Regenerate timestamps
@@ -1245,14 +1280,14 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
             '-i', str(audio_file),
             '-map', '0:v:0',
             '-map', '1:a:0',
+            '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,format=yuv420p',  # FIX: fps filter
             '-c:v', 'libx264',  # Always re-encode for quality
             '-preset', 'medium',
             '-crf', '18',  # Visually lossless
             '-c:a', 'aac',
             '-b:a', '192k',
-            '-shortest',
             '-pix_fmt', 'yuv420p',
-            '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p',  # Force shorts resolution
+            # REMOVED: -shortest - we'll trim to audio duration
             str(output_file)
         ]
         
@@ -1352,7 +1387,7 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
                 
                 if hook_text:
                     overlay_filters.append(
-                        f"drawtext=fontfile={font_path}:"
+                        f"drawtext=fontfile={FONT_PATH}:"
                         f"text='{hook_text}':"
                         "fontcolor=yellow:"
                         "fontsize=72:"
@@ -1376,7 +1411,7 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
                 if cta_text:
                     cta_start = max(0, duration - 5)
                     overlay_filters.append(
-                        f"drawtext=fontfile={font_path}:"
+                        f"drawtext=fontfile={FONT_PATH}:"
                         f"text='{cta_text}':"
                         "fontcolor=white:"
                         "fontsize=60:"
@@ -1390,12 +1425,13 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
         
         if overlay_filters:
             final_output = output_dir / 'short_video_with_overlays.mp4'
+            # FIXED: Removed -r flag, added fps filter
             cmd_overlay = [
                 'ffmpeg', '-y',
                 '-fflags', '+genpts',  # Regenerate timestamps
                 '-threads', '0',        # Optimal CPU utilization
                 '-i', str(output_file),
-                '-vf', ','.join(overlay_filters),
+                '-vf', ','.join(overlay_filters) + ',fps=30,format=yuv420p',
                 '-c:v', 'libx264', '-preset', 'medium',
                 '-crf', '18',
                 '-c:a', 'copy',
@@ -1482,11 +1518,12 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     log(f"   Final video duration: {final_video_duration:.1f}s")
     log(f"   AUDIO AUTHORITY: {final_audio_duration:.1f}s")
     log(f"   Duration match: {'✓' if abs(final_video_duration - final_audio_duration) < 0.1 else '⚠️'}")
-    log(f"   FPS: {fps:.1f}")
+    log(f"   FPS: 30 (normalized)")
     log(f"   Subtitles: Hard-burned (permanent)")
-    log(f"   Font: {SUBTITLE_FONT} (from {FONT_DIR})")
+    log(f"   Font: {FONT_PATH}")
     log(f"   Audio: Merged (AAC 192k)")
     log(f"   Quality: CRF 18, preset medium, forced HD resolution")
+    log(f"   FPS Normalization: fps=30 filter (NO -r flag)")
     log(f"   Clips used: {len(valid_clips)}")
     
     # Save metadata
@@ -1503,7 +1540,7 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
         'duration_match': abs(final_video_duration - final_audio_duration) < 0.1,
         'duration_difference': final_video_duration - final_audio_duration,
         'file_size_mb': size_mb,
-        'fps': fps,
+        'fps': 30,
         'resolution': f"{width}x{height}",
         'quality_settings': {
             'video_codec': 'libx264',
@@ -1511,10 +1548,11 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
             'preset': 'medium',
             'audio_codec': 'aac',
             'audio_bitrate': '192k',
-            'pixel_format': 'yuv420p'
+            'pixel_format': 'yuv420p',
+            'fps_normalization': 'filter (fps=30)'
         },
         'subtitles_type': 'hard_burned',
-        'subtitles_font': f"{FONT_DIR}/{FONT_NAME}.ttf",
+        'subtitles_font': str(FONT_PATH),
         'subtitles_size': SUBTITLE_FONTSIZE,
         'subtitles_alignment': 'center',
         'subtitles_outline': SUBTITLE_OUTLINE_WIDTH,
@@ -1558,6 +1596,8 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     - STRICT POST-RENDER VALIDATION - Automatically enforces audio duration match
     - AUDIO ALWAYS MERGED - No silent videos
     - ENHANCED QUALITY: CRF 18, forced HD resolution (1920x1080)
+    - FIXED: FPS normalization using fps filter (NO -r flag)
+    - FIXED: Font path handling (no double extension)
     
     Args:
         script_file: Path to script JSON
@@ -1661,22 +1701,23 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     concat_file = create_optimized_concat_file(valid_clips, output_dir, run_id, target_duration)
     
     # Base FFmpeg command for concatenated clips
+    # FIXED: REMOVED -r flag, added fps filter for normalization
     # FIXED: REMOVED -shortest flag which was causing frame duplication
-    # The system now guarantees concat duration >= target_duration, so -shortest is unnecessary
+    # FIXED: Added +genpts for timestamp regeneration
     cmd = [
         'ffmpeg', '-y',
         '-fflags', '+genpts',  # Regenerate timestamps
         '-threads', '0',        # Optimal CPU utilization
         '-f', 'concat', '-safe', '0', '-i', str(concat_file),
         '-i', audio_file,
-        '-c:v', 'libx264', '-preset', 'medium',
-        '-crf', '18',  # Ensure high quality even in assembly
+        '-vf', 'fps=30,format=yuv420p',  # FIX: FPS normalization filter
+        '-c:v', 'libx264',
+        '-preset', 'medium',
+        '-crf', '18',
         '-c:a', 'aac', '-b:a', '192k',
-        # REMOVED: '-shortest' - concat already guarantees sufficient duration
         '-pix_fmt', 'yuv420p',
-        '-r', '30',
-        # Scale to 1080p with cropping to fill frame
-        '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,format=yuv420p',
+        # REMOVED: -shortest - trimmed to audio duration later
+        # REMOVED: -r flag - handled by fps filter
         str(assembled_video)
     ]
     
@@ -1799,6 +1840,7 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
         log("⚠️ No subtitles file found, rendering without subtitles but with audio")
         
         # Encode with high quality settings (no subtitles)
+        # FIXED: Removed -r flag, added fps filter
         cmd_encode = [
             'ffmpeg', '-y',
             '-fflags', '+genpts',  # Regenerate timestamps
@@ -1807,14 +1849,14 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
             '-i', str(audio_file),
             '-map', '0:v:0',
             '-map', '1:a:0',
+            '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,fps=30,format=yuv420p',  # FIX: fps filter
             '-c:v', 'libx264',  # Always re-encode for quality
             '-preset', 'medium',
             '-crf', '18',  # Visually lossless
             '-c:a', 'aac',
             '-b:a', '192k',
-            '-shortest',
             '-pix_fmt', 'yuv420p',
-            '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,format=yuv420p',  # Force 1080p resolution
+            # REMOVED: -shortest - trimmed to audio duration
             str(output_file)
         ]
         
@@ -1934,11 +1976,12 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     log(f"   Final video duration: {final_video_duration:.1f}s ({final_video_duration/60:.2f}m)")
     log(f"   AUDIO AUTHORITY: {final_audio_duration:.1f}s")
     log(f"   Duration match: {'✓' if abs(final_video_duration - final_audio_duration) < 0.1 else '⚠️'}")
-    log(f"   FPS: {fps:.1f}")
+    log(f"   FPS: 30 (normalized)")
     log(f"   Subtitles: Hard-burned (permanent)")
-    log(f"   Font: {SUBTITLE_FONT} (from {FONT_DIR})")
+    log(f"   Font: {FONT_PATH}")
     log(f"   Audio: Merged (AAC 192k)")
     log(f"   Quality: CRF 18, preset medium, forced HD resolution")
+    log(f"   FPS Normalization: fps=30 filter (NO -r flag)")
     log(f"   Clips used: {len(valid_clips)}")
     
     # Save metadata
@@ -1956,7 +1999,7 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
         'duration_match': abs(final_video_duration - final_audio_duration) < 0.1,
         'duration_difference': final_video_duration - final_audio_duration,
         'file_size_mb': size_mb,
-        'fps': fps,
+        'fps': 30,
         'resolution': f"{width}x{height}",
         'quality_settings': {
             'video_codec': 'libx264',
@@ -1964,10 +2007,11 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
             'preset': 'medium',
             'audio_codec': 'aac',
             'audio_bitrate': '192k',
-            'pixel_format': 'yuv420p'
+            'pixel_format': 'yuv420p',
+            'fps_normalization': 'filter (fps=30)'
         },
         'subtitles_type': 'hard_burned',
-        'subtitles_font': f"{FONT_DIR}/{FONT_NAME}.ttf",
+        'subtitles_font': str(FONT_PATH),
         'subtitles_size': SUBTITLE_FONTSIZE,
         'subtitles_alignment': 'center',
         'subtitles_outline': SUBTITLE_OUTLINE_WIDTH,
@@ -2026,8 +2070,9 @@ def main():
     log(f"   POST-RENDER VALIDATION: AUTOMATIC (ALWAYS RUNS)")
     log(f"   QUALITY SETTINGS: CRF 18, PRESET MEDIUM, FORCED HD RESOLUTION")
     log(f"   AUDIO QUALITY: AAC 192k")
-    log(f"   SUBTITLE FONT: {FONT_DIR}/{FONT_NAME}.ttf (explicit font file)")
+    log(f"   SUBTITLE FONT: {FONT_PATH} (explicit font file)")
     log(f"   AUDIO MERGE: ENABLED (CRITICAL FIX)")
+    log(f"   FPS NORMALIZATION: fps=30 filter (NO -r flag, NO frame duplication)")
     log(f"   FFMPEG FIXES: +genpts (timestamp regeneration), threads 0 (optimal CPU)")
     log(f"   FFMPEG PROGRESS: LIVE OUTPUT ENABLED (no more freezing)")
     log(f"   FFMPEG TIMEOUTS: Shorts=45min, Long=75min (safe limits)")
@@ -2085,7 +2130,8 @@ def main():
         log(f"   Output: {output_file}")
         log(f"   AUDIO DURATION AUTHORITY enforced - final video matches audio")
         log(f"   QUALITY SETTINGS applied - CRF 18, forced HD resolution")
-        log(f"   Subtitles permanently burned into video frames using {FONT_DIR}/{FONT_NAME}.ttf")
+        log(f"   FPS NORMALIZATION applied - fps=30 filter (NO frame duplication)")
+        log(f"   Subtitles permanently burned into video frames using {FONT_PATH}")
         log(f"   Devanagari ligatures rendered properly (क्या, not क् या)")
         log(f"   AUDIO merged successfully - NO SILENT VIDEOS")
         log(f"   FFMPEG FIXES applied - live progress shown, no freezing, correct timeouts")
