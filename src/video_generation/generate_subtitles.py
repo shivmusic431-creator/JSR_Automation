@@ -581,7 +581,7 @@ def generate_subtitles_from_script(
                 # Write pure SRT entry - NO alignment markers, NO ASS styling
                 f.write(f"{idx}\n")
                 f.write(f"{format_srt_time(start_time)} --> {format_srt_time(end_time)}\n")
-                f.write(f"{subtitle}\n\n")
+                f.write(f"{{\\an5}}{subtitle}\n\n")
                 
                 # Heartbeat logging for long videos
                 if time.time() - last_heartbeat > HEARTBEAT_INTERVAL:
