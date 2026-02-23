@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """
 Video Editing - Premium Animated Subtitles with Cinematic Styling
-Features dynamic audio file detection and automatic clip looping to fill audio duration
-Now supports UNLIMITED CLIPS from pagination and enhanced clip validation
-ABSOLUTELY NO BLACK VIDEO GENERATION - Fails safely if requirements not met
+Features dynamic audio file detection and automatic clip concatenation
+NOW WITH FIXED: No double validation, No unnecessary looping
 AUDIO DURATION AUTHORITY - Final video duration must match audio duration exactly
 STRICT POST-RENDER VALIDATION - Automatically enforces audio duration match
-FIXED: FPS normalization using filter instead of -r flag to prevent frame duplication
-FIXED: Font extension no longer duplicated
+FIXED: Resolution fixed to 720p for both long and short videos
+FIXED: Removed duplicate validation (trust acquire_assets manifest)
+FIXED: Simple concat without unnecessary loops
 FIXED: Proper timestamp regeneration with +genpts
-FIXED: Removed -shortest flag to prevent desync
-FIXED: Audio authority trimming before final encoding
 """
 import os
 import json
@@ -500,7 +498,7 @@ def get_video_metadata(video_path: Path) -> tuple:
 
 
 # ============================================================================
-# FIXED: CLIP MANAGEMENT WITH ENHANCED LOOPING - PROPER DURATION GUARANTEE
+# FIXED: SIMPLE CLIP MANAGEMENT - NO UNNECESSARY LOOPING
 # ============================================================================
 
 def get_clip_duration(clip_path: Path) -> float:
@@ -522,8 +520,7 @@ def get_clip_duration(clip_path: Path) -> float:
 
 def validate_clip_for_use(clip_path: Path) -> bool:
     """
-    Validate clip is still usable before adding to concat
-    Performs quick check to ensure file is not corrupted
+    Quick validation that clip is usable - minimal check
     """
     if not clip_path.exists():
         return False
@@ -546,148 +543,42 @@ def validate_clip_for_use(clip_path: Path) -> bool:
         return False
 
 
-def calculate_total_clips_duration(clips: list, clips_path: Path) -> tuple:
+def load_clips_from_manifest(manifest_path: Path, clips_path: Path) -> tuple:
     """
-    Calculate total duration of all unique clips with validation
-    Returns validated clips and their total duration
-    """
-    total_duration = 0.0
-    valid_clips = []
-    invalid_clips = []
-    
-    log("🔍 Validating clips for use...")
-    
-    for clip in clips:
-        clip_path = Path(clip)
-        if not clip_path.exists():
-            clip_path = clips_path / clip_path.name
-        
-        if clip_path.exists():
-            if validate_clip_for_use(clip_path):
-                duration = get_clip_duration(clip_path)
-                if duration > 0:
-                    total_duration += duration
-                    valid_clips.append(str(clip_path.absolute()))
-                    log(f"  ✅ {clip_path.name}: {duration:.2f}s")
-                else:
-                    invalid_clips.append(str(clip_path))
-                    log(f"  ❌ {clip_path.name}: Invalid duration", "WARNING")
-            else:
-                invalid_clips.append(str(clip_path))
-                log(f"  ❌ {clip_path.name}: Corrupted or invalid", "WARNING")
-        else:
-            invalid_clips.append(str(clip_path))
-            log(f"  ❌ {clip_path.name}: File missing", "WARNING")
-    
-    log(f"📊 Valid clips: {len(valid_clips)} (total {total_duration:.2f}s)")
-    if invalid_clips:
-        log(f"⚠️ Invalid clips skipped: {len(invalid_clips)}")
-    
-    return total_duration, valid_clips
-
-
-def create_optimized_concat_file(clips: list, output_dir: Path, run_id: str, target_duration: float) -> Path:
-    """
-    Create optimized concat file that GUARANTEES cumulative duration >= target_duration.
-    Dynamically loops clips until duration condition is satisfied.
-    
-    CRITICAL FIX: Previously only wrote clips once, causing FFmpeg to stretch video
-    and duplicate frames. Now properly loops clips until target duration is met.
+    Load clips directly from manifest WITHOUT revalidation.
+    Trust that acquire_assets already validated everything.
     
     Args:
-        clips: List of clip file paths
-        output_dir: Directory to write concat file
-        run_id: Run identifier for unique filename
-        target_duration: Target duration to meet or exceed
+        manifest_path: Path to manifest file
+        clips_path: Directory containing clips
         
     Returns:
-        Path to created concat file
+        Tuple of (valid_clips_list, total_duration)
         
     Raises:
-        RuntimeError: If no valid clip durations can be determined
+        RuntimeError: If manifest is invalid or clips missing
     """
-    concat_file = output_dir / f'concat_{run_id}.txt'
+    log("📋 Loading clips from manifest (trusting acquire_assets validation)...")
     
-    log(f"🔧 Creating optimized concat file targeting duration: {target_duration:.2f}s")
-    log("Concat generation fixed and duration guaranteed")
-    
-    # Cache clip durations for performance
-    durations = {}
-    total_single_loop_duration = 0.0
-    
-    # Calculate duration of each clip
-    for clip in clips:
-        clip_path = Path(clip)
-        duration = get_clip_duration(clip_path)
-        clip_str = str(clip_path)
-        durations[clip_str] = duration
-        total_single_loop_duration += duration
-    
-    # Validate we have usable durations
-    if total_single_loop_duration <= 0:
-        error_msg = "❌ FATAL: No valid clip durations detected - cannot create concat file"
+    if not manifest_path.exists():
+        error_msg = f"❌ Manifest file not found: {manifest_path}"
         log(error_msg, "ERROR")
         raise RuntimeError(error_msg)
-    
-    log(f"📊 Single loop duration: {total_single_loop_duration:.2f}s")
-    
-    # Calculate approximate loops needed (for logging only)
-    estimated_loops = math.ceil(target_duration / total_single_loop_duration)
-    log(f"🔄 Estimated loops needed: {estimated_loops}")
-    
-    cumulative_duration = 0.0
-    loop_index = 0
-    
-    # Write concat file with dynamic looping
-    with open(concat_file, "w", encoding="utf-8") as f:
-        while cumulative_duration < target_duration:
-            loop_index += 1
-            
-            # Shuffle clips for variety in each loop
-            shuffled_clips = clips.copy()
-            random.shuffle(shuffled_clips)
-            
-            log(f"🔄 Writing concat loop #{loop_index} (cumulative: {cumulative_duration:.2f}s / {target_duration:.2f}s)")
-            
-            for clip in shuffled_clips:
-                clip_str = str(Path(clip))
-                duration = durations[clip_str]
-                
-                # Write clip to concat file
-                f.write(f"file '{clip_str}'\n")
-                cumulative_duration += duration
-                
-                # Stop immediately if we've met or exceeded target
-                if cumulative_duration >= target_duration:
-                    log(f"✅ Target duration reached at {cumulative_duration:.2f}s")
-                    break
-    
-    log(f"📊 Final concat duration: {cumulative_duration:.2f}s (target: {target_duration:.2f}s)")
-    log(f"📝 Wrote {loop_index} loop(s) with {len(clips)} unique clips")
-    
-    return concat_file
-
-
-def verify_manifest_integrity(manifest_path: Path, clips_path: Path) -> tuple:
-    """
-    Verify all clips in manifest exist and are valid
-    Returns (valid_clips_list, total_duration, is_valid)
-    """
-    if not manifest_path.exists():
-        log(f"❌ Manifest file not found: {manifest_path}", "ERROR")
-        return [], 0.0, False
     
     try:
         with open(manifest_path, 'r', encoding='utf-8') as f:
             manifest = json.load(f)
         
         clips = manifest.get('clips', [])
-        audio_authority_target = manifest.get('audio_authority_target', manifest.get('target_duration', 0))
         
-        log(f"🔍 Verifying manifest integrity: {len(clips)} clips, audio authority target: {audio_authority_target:.1f}s")
+        if not clips:
+            error_msg = "Manifest contains no clips"
+            log(error_msg, "ERROR")
+            raise RuntimeError(error_msg)
         
         valid_clips = []
         total_duration = 0.0
+        missing_clips = []
         
         for clip in clips:
             # Get clip path
@@ -698,12 +589,13 @@ def verify_manifest_integrity(manifest_path: Path, clips_path: Path) -> tuple:
                 clip_path = Path(clip['file'])
             
             if not clip_path or not clip_path.exists():
-                log(f"❌ Clip missing from disk: {clip.get('filename', 'unknown')}", "ERROR")
-                return [], 0.0, False
+                missing_clips.append(clip.get('filename', 'unknown'))
+                continue
             
+            # Minimal validation - just check if readable
             if not validate_clip_for_use(clip_path):
-                log(f"❌ Clip corrupted or unreadable: {clip_path.name}", "ERROR")
-                return [], 0.0, False
+                missing_clips.append(clip_path.name)
+                continue
             
             duration = clip.get('duration', 0)
             if duration <= 0:
@@ -712,17 +604,89 @@ def verify_manifest_integrity(manifest_path: Path, clips_path: Path) -> tuple:
             valid_clips.append(str(clip_path.absolute()))
             total_duration += duration
         
-        log(f"📊 Verified {len(valid_clips)} valid clips, total duration: {total_duration:.1f}s")
+        if missing_clips:
+            error_msg = f"❌ Missing or invalid clips: {missing_clips}"
+            log(error_msg, "ERROR")
+            raise RuntimeError(error_msg)
         
-        return valid_clips, total_duration, True
+        log(f"📊 Loaded {len(valid_clips)} clips, total duration: {total_duration:.1f}s")
+        
+        # CRITICAL: Verify total duration meets audio requirement
+        audio_target = manifest.get('audio_authority_target', manifest.get('target_duration', 0))
+        if total_duration < audio_target:
+            error_msg = (f"❌ Total clip duration ({total_duration:.1f}s) is less than "
+                        f"audio target ({audio_target:.1f}s). This should not happen as "
+                        f"acquire_assets guarantees sufficient duration.")
+            log(error_msg, "ERROR")
+            raise RuntimeError(error_msg)
+        
+        return valid_clips, total_duration
         
     except Exception as e:
-        log(f"❌ Failed to verify manifest: {e}", "ERROR")
+        log(f"❌ Failed to load manifest: {e}", "ERROR")
+        raise
+
+
+# ============================================================================
+# FIXED: SIMPLE CONCAT FILE GENERATION - NO LOOPING
+# ============================================================================
+
+def create_simple_concat_file(clips: list, output_dir: Path, run_id: str) -> Path:
+    """
+    Create a simple concat file with all clips exactly once.
+    NO LOOPING - because acquire_assets already provides enough duration.
+    
+    Args:
+        clips: List of clip file paths
+        output_dir: Directory to write concat file
+        run_id: Run identifier for unique filename
+        
+    Returns:
+        Path to created concat file
+    """
+    concat_file = output_dir / f'concat_{run_id}.txt'
+    
+    log(f"🔧 Creating simple concat file with {len(clips)} clips (no looping)")
+    
+    # Shuffle clips once for variety
+    shuffled_clips = clips.copy()
+    random.shuffle(shuffled_clips)
+    
+    # Write all clips to concat file
+    with open(concat_file, "w", encoding="utf-8") as f:
+        for clip in shuffled_clips:
+            clip_str = str(Path(clip))
+            f.write(f"file '{clip_str}'\n")
+    
+    log(f"📝 Concat file created with {len(shuffled_clips)} clips")
+    
+    return concat_file
+
+
+# ============================================================================
+# FIXED: SIMPLE MANIFEST LOADING - NO REVALIDATION
+# ============================================================================
+
+def verify_manifest_integrity(manifest_path: Path, clips_path: Path) -> tuple:
+    """
+    DEPRECATED - Use load_clips_from_manifest instead.
+    Keeping for backward compatibility but simplified.
+    
+    Returns:
+        Tuple of (valid_clips_list, total_duration, is_valid)
+    """
+    log("⚠️ WARNING: verify_manifest_integrity is deprecated. Using load_clips_from_manifest instead.")
+    
+    try:
+        valid_clips, total_duration = load_clips_from_manifest(manifest_path, clips_path)
+        return valid_clips, total_duration, True
+    except Exception as e:
+        log(f"❌ Manifest verification failed: {e}", "ERROR")
         return [], 0.0, False
 
 
 # ============================================================================
-# FIXED VIDEO RENDERING WITH HARD SUBTITLES AND AUDIO - ENHANCED QUALITY
+# FIXED VIDEO RENDERING WITH HARD SUBTITLES AND AUDIO - 720p QUALITY
 # ============================================================================
 
 def render_video_with_hard_subtitles(
@@ -736,24 +700,13 @@ def render_video_with_hard_subtitles(
     """
     Render final video with hard-burned subtitles using FFmpeg.
 
-    FIXED: Removed -r flag, added fps filter for proper FPS normalization
-    FIXED: Font path handling - no double extension
-    FIXED: Single-input with audio stream copy to prevent desync
-    FIXED: Proper timestamp regeneration with +genpts
-    FIXED: Removed -shortest flag - trimmed to audio duration before encoding
-
+    UPDATED: Resolution fixed to 720p for both video types
     QUALITY SETTINGS:
-    - CRF 18: Visually lossless quality
+    - CRF 23: Good quality with smaller file size (was 18 - too large)
     - preset medium: Good compression/speed balance
-    - Resolution normalised to target HD dimensions
-    - FPS normalized to 30 via filter (no frame duplication)
+    - Resolution: 1280x720 for long, 720x1280 for shorts
+    - FPS normalized to 30 via filter
     - Audio preserved losslessly via stream copy
-
-    SUBTITLE FILTER:
-    - Pure SRT input (no ASS headers)
-    - Absolute paths with proper escaping
-    - fontsdir parameter for font lookup
-    - charenc=UTF-8 for Unicode support
 
     Args:
         input_video: Path to assembled input video (ALREADY contains audio)
@@ -766,15 +719,12 @@ def render_video_with_hard_subtitles(
     Returns:
         True if render succeeded, False otherwise
     """
-    log(f"🎥 Rendering video with hard-burned subtitles (SINGLE-INPUT, audio stream-copy)...")
+    log(f"🎥 Rendering video with hard-burned subtitles (720p quality)...")
     log(f"   Input video (with audio): {input_video}")
     log(f"   Subtitle file: {subtitles_srt}")
-    log(f"   Audio handling: -c:a copy (stream-copy from input_video, no re-merge)")
     log(f"   Font path: {FONT_PATH}")
-    log(f"   Font size: {SUBTITLE_FONTSIZE}")
-    log(f"   QUALITY SETTINGS: CRF 18, preset medium, forced HD resolution")
-    log(f"   FPS NORMALIZATION: fps=30 filter (NO -r flag) to prevent frame duplication")
-    log(f"   FFMPEG FIXES: +genpts (timestamp regeneration), threads 0 (optimal CPU)")
+    log(f"   QUALITY SETTINGS: CRF 23, preset medium, 720p resolution")
+    log(f"   FPS NORMALIZATION: fps=30 filter")
 
     # ============================================================================
     # VALIDATION - CRITICAL PRE-FLIGHT CHECKS
@@ -794,7 +744,7 @@ def render_video_with_hard_subtitles(
         log(f"❌ Input video not found or empty: {input_video}")
         return False
 
-    # Verify font file exists (using FONT_PATH to ensure single extension)
+    # Verify font file exists
     if not FONT_PATH.exists():
         error_msg = f"❌ FATAL: Font file not found at: {FONT_PATH}"
         log(error_msg, "ERROR")
@@ -803,16 +753,7 @@ def render_video_with_hard_subtitles(
         log(f"✅ Font file verified: {FONT_PATH}")
 
     # ============================================================================
-    # DEBUG LOGGING
-    # ============================================================================
-    log(f"🔍 DEBUG: Subtitle file exists: {subtitles_srt.exists()}, size: {subtitles_srt.stat().st_size} bytes")
-    log(f"🔍 DEBUG: Font exists: {FONT_PATH.exists()}")
-    
-    # ============================================================================
-    # FIX: Set fontconfig to use a WRITABLE cache directory inside the workspace.
-    # The root cause of "Operation not permitted" is libass trying to write font cache
-    # to /usr/share/fonts which is read-only in GitHub Actions sandbox.
-    # Solution: redirect font cache to a temp dir we own.
+    # Fontconfig cache setup
     # ============================================================================
     fontconfig_cache_dir = Path(tempfile.mkdtemp(prefix="fontconfig_cache_"))
     os.environ["FONTCONFIG_PATH"] = "/etc/fonts"
@@ -822,7 +763,7 @@ def render_video_with_hard_subtitles(
     log(f"✅ Fontconfig cache redirected to writable dir: {fontconfig_cache_dir}")
 
     # ============================================================================
-    # Build subtitle filter with absolute paths - PURE SRT INPUT
+    # Build subtitle filter with absolute paths
     # ============================================================================
     fonts_dir = Path(FONT_DIR).resolve()
     subtitle_file = subtitles_srt.resolve()
@@ -831,29 +772,23 @@ def render_video_with_hard_subtitles(
     fonts_escaped = str(fonts_dir).replace("\\", "/").replace(":", "\\:")
     subtitle_escaped = str(subtitle_file).replace("\\", "/").replace(":", "\\:")
     
-    # Determine resolution based on video type
+    # UPDATED: Resolution fixed to 720p
     if video_type == "short":
-        target_width, target_height = 1080, 1920
+        target_width, target_height = 720, 1280  # 720p portrait
     else:
-        target_width, target_height = 1920, 1080
+        target_width, target_height = 1280, 720  # 720p landscape
 
-    # Build filter chain:
-    # 1. Scale to target resolution with aspect ratio preservation
-    # 2. Crop to exact dimensions
-    # 3. Normalize FPS to 30 (CRITICAL FIX - prevents frame duplication)
-    # 4. Set pixel format
-    # 5. Burn subtitles
+    # Build filter chain
     scale_filter = (
         f"scale={target_width}:{target_height}"
         f":force_original_aspect_ratio=increase"
         f",crop={target_width}:{target_height}"
     )
     
-    # Complete filter chain - FPS normalization BEFORE subtitle burn
-    # This ensures consistent frame rate across all clips
+    # Complete filter chain
     vf_filter = (
         f"{scale_filter},"
-        f"fps=30,"  # FIX: Use filter instead of -r flag to prevent frame duplication
+        f"fps=30,"
         f"format=yuv420p,"
         f"subtitles=filename='{subtitle_escaped}':"
         f"fontsdir='{fonts_escaped}':"
@@ -862,66 +797,44 @@ def render_video_with_hard_subtitles(
 
     log(f"Using video filter chain: {vf_filter}")
 
-    # -------------------------------------------------------------------------
-    # SINGLE-INPUT FFmpeg command.
-    # input_video already contains the merged audio from Stage 1.
-    # -c:a copy  → stream-copy audio, zero quality loss, no filtergraph conflict.
-    # No -map flags needed: FFmpeg automatically selects the single video + audio stream.
-    # No -shortest: trimmed to audio duration before encoding.
-    # No -r flag: FPS normalization handled by filter.
-    # -------------------------------------------------------------------------
+    # FFmpeg command
     cmd = [
         'ffmpeg', '-y',
-        '-fflags', '+genpts',       # Regenerate timestamps (prevents subtitle filter crashes)
-        '-threads', '0',             # Optimal CPU utilisation
-        '-i', str(input_video),      # SINGLE INPUT — already contains audio
-        '-vf', vf_filter,            # Scale → fps normalize → format → burn subtitles
-        '-c:v', 'libx264',           # Re-encode video to burn in subtitles
+        '-fflags', '+genpts',
+        '-threads', '0',
+        '-i', str(input_video),
+        '-vf', vf_filter,
+        '-c:v', 'libx264',
         '-preset', 'medium',
-        '-crf', '18',                # Visually lossless
-        '-c:a', 'copy',              # Stream-copy audio — no re-merge, no quality loss
+        '-crf', '23',  # UPDATED: Changed from 18 to 23 for smaller files
+        '-c:a', 'copy',
         '-pix_fmt', 'yuv420p',
-        '-movflags', '+faststart',   # Web optimisation
+        '-movflags', '+faststart',
         '-metadata', f'title=YT-AutoPilot {video_type} video',
         '-metadata', 'artist=AI Generated',
         '-metadata', 'comment=Created with YT-AutoPilot',
         str(output_video)
     ]
 
-    # Log command summary for debugging
-    log(f"⚙️ Running FFmpeg (subtitle burn, single-input)...")
-    log(f"   Video codec: libx264, CRF 18, preset medium")
-    log(f"   Resolution: {target_width}x{target_height}")
-    log(f"   FPS normalization: fps=30 filter (NO -r flag)")
-    log(f"   Audio codec: copy (stream-copy from input_video)")
-    log(f"   Filter chain: {vf_filter}")
-    log(f"   FFMPEG FIXES: +genpts, threads 0 applied")
+    log(f"⚙️ Running FFmpeg (subtitle burn)...")
+    log(f"   Resolution: {target_width}x{target_height} (720p)")
+    log(f"   CRF: 23 (balanced quality/size)")
     
     # Set timeout based on video type
     if video_type == "short":
-        # Short videos: 45 minutes timeout
-        timeout_seconds = 2700
-        log(f"⏱️ Short video timeout set to 45 minutes ({timeout_seconds/60:.1f}m)")
+        timeout_seconds = 1800  # 30 minutes for shorts
     else:
-        # Long videos: 75 minutes timeout (fixed, not dependent on duration)
-        timeout_seconds = 4500
-        log(f"⏱️ Long video timeout set to 75 minutes ({timeout_seconds/60:.1f}m)")
+        timeout_seconds = 7200  # 2 hours for long videos
     
     try:
-        # Build environment for FFmpeg subprocess.
-        # CRITICAL: Pass fontconfig cache env vars so libass uses writable dir.
+        # Run FFmpeg with live progress
         ffmpeg_env = os.environ.copy()
         ffmpeg_env["XDG_CACHE_HOME"] = str(fontconfig_cache_dir)
-        ffmpeg_env["FC_CACHE_DIR"] = str(fontconfig_cache_dir)
-        ffmpeg_env["FONTCONFIG_PATH"] = "/etc/fonts"
-        ffmpeg_env["FONTCONFIG_FILE"] = "/etc/fonts/fonts.conf"
 
-        # FIXED: Use Popen with live progress output
-        # This prevents the "frozen" appearance and shows encoding progress
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,  # Redirect stderr to stdout
+            stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
             universal_newlines=True,
@@ -933,76 +846,44 @@ def render_video_with_hard_subtitles(
         
         start_time = time.time()
         
-        # Read and display output line by line
         while True:
             line = process.stdout.readline()
             
             if line:
-                # Print the line to show progress
                 print(line.strip())
                 sys.stdout.flush()
             
-            # Check if process has finished
             if process.poll() is not None:
                 break
             
-            # Check timeout
             if time.time() - start_time > timeout_seconds:
                 process.kill()
-                error_msg = f"❌ FFmpeg timeout exceeded ({timeout_seconds/60:.1f} minutes) - process killed"
+                error_msg = f"❌ FFmpeg timeout exceeded ({timeout_seconds/60:.1f} minutes)"
                 log(error_msg, "ERROR")
                 raise RuntimeError(error_msg)
         
         log("-" * 80)
         
-        # Check return code
         if process.returncode != 0:
             log(f"❌ FFmpeg failed with code {process.returncode}", "ERROR")
             return False
             
-        # Verify output file exists and has content
+        # Verify output file
         if output_video.exists() and output_video.stat().st_size > 0:
             size_mb = output_video.stat().st_size / (1024 * 1024)
-            log(f"✅ Video rendered successfully with hard subtitles and audio: {size_mb:.2f} MB")
-            
-            # Quick verification that file is valid
-            probe_cmd = [
-                'ffprobe', '-v', 'error',
-                '-show_entries', 'stream=codec_type',
-                '-of', 'json',
-                str(output_video)
-            ]
-            try:
-                probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=10)
-                if probe_result.returncode == 0:
-                    log(f"✅ Output video verified")
-                    return True
-                else:
-                    log(f"⚠️ Output video may be corrupted - ffprobe check failed")
-                    return False
-            except Exception as e:
-                log(f"⚠️ Failed to verify output video: {e}")
-                return False
+            log(f"✅ Video rendered successfully: {size_mb:.2f} MB")
+            return True
         else:
             log(f"❌ Output video file missing or empty", "ERROR")
             return False
             
-    except subprocess.TimeoutExpired:
-        log(f"❌ FFmpeg process timed out after {timeout_seconds/60:.1f} minutes", "ERROR")
-        process.kill()
-        try:
-            process.wait(timeout=30)
-        except:
-            pass
-        return False
-        
     except Exception as e:
         log(f"❌ FFmpeg execution failed: {e}", "ERROR")
         return False
 
 
 # ============================================================================
-# ENHANCED SHORTS VIDEO EDITING WITH HARD SUBTITLES AND AUDIO - NO BLACK FALLBACK
+# FIXED: SHORTS VIDEO EDITING - SIMPLIFIED, NO UNNECESSARY LOOPS
 # ============================================================================
 
 def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str, 
@@ -1012,29 +893,21 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     """
     Edit SHORTS video using FFmpeg with HARD-BURNED subtitles and AUDIO
     
-    Features:
-    - Noto Sans Devanagari-Regular font for proper Hindi ligature rendering
-    - Center-aligned subtitles with outline and shadow
-    - Perfect sync with word-level subtitles
-    - Automatic clip looping to fill full audio duration
-    - Enhanced clip validation and shuffling
-    - ABSOLUTELY NO BLACK VIDEO - Fails safely if requirements not met
-    - AUDIO DURATION AUTHORITY - Final video must match audio duration exactly
-    - STRICT POST-RENDER VALIDATION - Automatically enforces audio duration match
-    - AUDIO ALWAYS MERGED - No silent videos
-    - ENHANCED QUALITY: CRF 18, forced HD resolution (1080x1920)
-    - FIXED: FPS normalization using fps filter (NO -r flag)
-    - FIXED: Font path handling (no double extension)
+    FIXED:
+    - Simple clip loading from manifest (no revalidation)
+    - Simple concat (no loops)
+    - Resolution fixed to 720p
+    - CRF 23 for balanced quality/size
     
     Args:
         script_file: Path to script JSON
-        audio_file: Path to shorts audio WAV (audio_short.wav)
+        audio_file: Path to shorts audio WAV
         clips_dir: Directory containing video clips
         run_id: Run identifier
         subtitles_file: Optional path to SRT subtitles
         hook_file: Optional hook JSON for shorts
         cta_file: Optional CTA JSON for shorts
-        premium_subtitles: Parameter kept for compatibility (subtitles are always burned)
+        premium_subtitles: Parameter kept for compatibility
         
     Returns:
         Path to output video file or None if failed
@@ -1053,7 +926,7 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     max_duration = 58  # YouTube Shorts max is 60 seconds, using 58 for safety
     
     # ============================================================================
-    # PRE-RENDER VALIDATION - CRITICAL DEBUG CHECK
+    # PRE-RENDER VALIDATION
     # ============================================================================
     log("=" * 80)
     log("🔍 PRE-RENDER VALIDATION")
@@ -1075,9 +948,6 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     if clips_path.exists():
         clip_files = list(clips_path.glob('*.mp4'))
         log(f"Clips count: {len(clip_files)}")
-        if clip_files:
-            # Log first few clips for debugging
-            log(f"Sample clips: {', '.join([f.name for f in clip_files[:3]])}")
     
     log("=" * 80)
     
@@ -1086,54 +956,18 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     target_duration = min(audio_duration, max_duration)
     log(f"🎯 AUDIO AUTHORITY target duration: {target_duration:.2f}s")
     
-    # Load and verify manifest
+    # Step 2: Load clips from manifest (NO REVALIDATION)
     manifest_file = clips_path / 'manifest.json'
-    
-    # CRITICAL: Verify manifest integrity before proceeding
-    valid_clips, total_clips_duration, manifest_valid = verify_manifest_integrity(manifest_file, clips_path)
-    
-    if not manifest_valid:
-        error_msg = (
-            f"❌ FATAL: Manifest verification failed. Cannot proceed with video generation. "
-            f"No black video fallback allowed."
-        )
-        log(error_msg, "ERROR")
+    try:
+        valid_clips, total_clips_duration = load_clips_from_manifest(manifest_file, clips_path)
+    except Exception as e:
+        log(f"❌ Failed to load clips: {e}", "ERROR")
         return None
     
-    if not valid_clips:
-        error_msg = (
-            f"❌ FATAL: No valid clips found after verification. "
-            f"Cannot generate video without clips. No black video fallback allowed."
-        )
-        log(error_msg, "ERROR")
-        return None
+    # Step 3: Create simple concat file (NO LOOPS)
+    concat_file = create_simple_concat_file(valid_clips, output_dir, run_id)
     
-    # CRITICAL: Verify total duration meets requirement
-    if total_clips_duration < target_duration:
-        error_msg = (
-            f"❌ FATAL: Total clip duration ({total_clips_duration:.1f}s) "
-            f"is less than AUDIO AUTHORITY target ({target_duration:.1f}s). "
-            f"Cannot generate video without black sections. "
-            f"Asset acquisition must fetch more clips."
-        )
-        log(error_msg, "ERROR")
-        return None
-    
-    # Calculate loop count
-    loop_count = math.ceil(target_duration / total_clips_duration)
-    
-    log(f"🔄 Loop count needed: {loop_count}")
-    log(f"   Each loop: {total_clips_duration:.1f}s of unique footage")
-    log(f"   Total after {loop_count} loops: {total_clips_duration * loop_count:.1f}s")
-    
-    # Create optimized concat file with shuffled clips
-    # FIXED: This now properly loops until target duration is met
-    concat_file = create_optimized_concat_file(valid_clips, output_dir, run_id, target_duration)
-    
-    # Base FFmpeg command for concatenated clips
-    # FIXED: REMOVED -r flag, added fps filter for normalization
-    # FIXED: REMOVED -shortest flag which was causing frame duplication
-    # FIXED: Added +genpts for timestamp regeneration
+    # Step 4: Assemble video
     cmd = [
         'ffmpeg', '-y',
         '-fflags', '+genpts',
@@ -1142,20 +976,18 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
         '-safe', '0',
         '-i', str(concat_file),
         '-i', audio_file,
-        '-vf', 'fps=30,format=yuv420p',  # FIX: FPS normalization filter
+        '-vf', 'fps=30,format=yuv420p',
         '-c:v', 'libx264',
         '-preset', 'medium',
-        '-crf', '18',
+        '-crf', '23',  # UPDATED: CRF 23 for better file size
         '-c:a', 'aac',
         '-b:a', '192k',
-        # REMOVED: '-shortest' - concat already guarantees sufficient duration
+        '-pix_fmt', 'yuv420p',
         str(assembled_video)
     ]
     
-    # Execute first pass (video assembly) - FIXED WITH PROPER TIMEOUT AND LIVE PROGRESS
-    log("🎬 Assembling video with HD quality settings...")
+    log("🎬 Assembling video...")
     try:
-        # FIXED: Use Popen with live progress output
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -1169,11 +1001,10 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
         log("-" * 80)
         
         start_time = time.time()
-        assembly_timeout = 600  # 10 minutes for assembly
+        assembly_timeout = 600  # 10 minutes
         
         while True:
             line = process.stdout.readline()
-            
             if line:
                 print(line.strip())
                 sys.stdout.flush()
@@ -1183,7 +1014,7 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
             
             if time.time() - start_time > assembly_timeout:
                 process.kill()
-                log(f"❌ Video assembly timed out after 10 minutes", "ERROR")
+                log(f"❌ Video assembly timed out", "ERROR")
                 return None
         
         log("-" * 80)
@@ -1197,102 +1028,63 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
         log(f"❌ Video assembly failed: {e}")
         return None
     
-    # Verify assembled video exists and has content
+    # Verify assembled video
     if not assembled_video.exists() or assembled_video.stat().st_size == 0:
         log(f"❌ Assembled video is empty or missing", "ERROR")
         return None
     
-    # Step 2: Get assembled video duration
+    # Step 5: Get assembled video duration
     assembled_duration = get_video_duration(assembled_video)
     log(f"📊 Assembled video duration: {assembled_duration:.3f}s")
     log(f"📊 AUDIO AUTHORITY duration: {target_duration:.3f}s")
     
-    # Step 3: AUDIO DURATION AUTHORITY ENFORCEMENT (initial pass)
-    # Case 1: Video longer than audio - TRIM EXACTLY to audio duration
+    # Step 6: Trim if needed
     if assembled_duration > target_duration:
         log(f"⚠️ Video is longer than audio by {assembled_duration - target_duration:.3f}s")
-        log(f"✂️ Trimming video to match AUDIO AUTHORITY exactly...")
+        log(f"✂️ Trimming video to match AUDIO AUTHORITY...")
         
         trim_success = trim_video_to_audio_duration(assembled_video, temp_video, target_duration)
         if not trim_success:
-            log(f"❌ Failed to trim video to audio duration", "ERROR")
+            log(f"❌ Failed to trim video", "ERROR")
             return None
-        
-        # Update reference for subtitle processing
         video_for_subtitles = temp_video
-        final_duration = target_duration
-        
-    # Case 2: Video shorter than audio - Check tolerance
-    elif assembled_duration < target_duration:
-        difference = target_duration - assembled_duration
-        log(f"⚠️ Video is shorter than audio by {difference:.3f}s")
-        
-        if difference > 0.5:
-            # Difference > 0.5s - raise validation warning but continue
-            log(f"⚠️ VALIDATION WARNING: Video shorter than audio by {difference:.3f}s (exceeds 0.5s tolerance)", "WARNING")
-            log(f"   This may cause audio/video desync. Consider increasing clip duration in asset acquisition.")
-        
-        # Use assembled video as-is (no trim needed)
-        shutil.copy2(assembled_video, temp_video)
-        video_for_subtitles = temp_video
-        final_duration = assembled_duration
-        
     else:
-        # Exact match - perfect
-        log(f"✅ Video duration exactly matches AUDIO AUTHORITY!")
         shutil.copy2(assembled_video, temp_video)
         video_for_subtitles = temp_video
-        final_duration = assembled_duration
     
-    # Get video metadata (for logging only)
-    width, height, duration, is_short, fps = get_video_metadata(video_for_subtitles)
-    log(f"📹 Video metadata: {width}x{height}, {duration:.1f}s, {fps:.1f}fps")
-    
-    # Render final video with HARD-BURNED subtitles and AUDIO
+    # Step 7: Render with subtitles
     render_success = False
     
-    # Always burn subtitles if SRT file exists
-    subtitles_srt_path = None
     if subtitles_file and Path(subtitles_file).exists():
-        subtitles_srt_path = Path(subtitles_file)
-        log(f"📝 Found subtitles file: {subtitles_srt_path}")
-        
-        # Render with hard-burned subtitles and audio
         render_success = render_video_with_hard_subtitles(
             video_for_subtitles,
             output_file,
-            subtitles_srt_path,
-            audio_file,  # Pass audio file for merging
-            duration,
+            Path(subtitles_file),
+            audio_file,
+            target_duration,
             'short'
         )
     else:
-        # No subtitles, just encode with audio
-        log("⚠️ No subtitles file found, rendering without subtitles but with audio")
-        
-        # Encode with high quality settings (no subtitles)
-        # FIXED: Removed -r flag, added fps filter
+        # Render without subtitles
         cmd_encode = [
             'ffmpeg', '-y',
-            '-fflags', '+genpts',  # Regenerate timestamps
-            '-threads', '0',        # Optimal CPU utilization
+            '-fflags', '+genpts',
+            '-threads', '0',
             '-i', str(video_for_subtitles),
-            '-i', str(audio_file),
+            '-i', audio_file,
             '-map', '0:v:0',
             '-map', '1:a:0',
-            '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,format=yuv420p',  # FIX: fps filter
-            '-c:v', 'libx264',  # Always re-encode for quality
+            '-vf', 'scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,fps=30,format=yuv420p',
+            '-c:v', 'libx264',
             '-preset', 'medium',
-            '-crf', '18',  # Visually lossless
+            '-crf', '23',
             '-c:a', 'aac',
             '-b:a', '192k',
             '-pix_fmt', 'yuv420p',
-            # REMOVED: -shortest - we'll trim to audio duration
             str(output_file)
         ]
         
         try:
-            # FIXED: Use Popen with live progress output
             process = subprocess.Popen(
                 cmd_encode,
                 stdout=subprocess.PIPE,
@@ -1306,11 +1098,10 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
             log("-" * 80)
             
             start_time = time.time()
-            encoding_timeout = 2700  # 45 minutes for shorts
+            encoding_timeout = 1800  # 30 minutes
             
             while True:
                 line = process.stdout.readline()
-                
                 if line:
                     print(line.strip())
                     sys.stdout.flush()
@@ -1320,8 +1111,7 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
                 
                 if time.time() - start_time > encoding_timeout:
                     process.kill()
-                    log(f"❌ Encoding timed out after 45 minutes", "ERROR")
-                    render_success = False
+                    log(f"❌ Encoding timed out", "ERROR")
                     break
             
             log("-" * 80)
@@ -1329,176 +1119,22 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
             if process.returncode == 0:
                 render_success = True
             else:
-                log(f"❌ Failed to encode video with audio (code {process.returncode})")
-                render_success = False
+                log(f"❌ Failed to encode video")
                 
         except Exception as e:
-            log(f"❌ Failed to encode video with audio: {e}")
-            render_success = False
+            log(f"❌ Failed to encode video: {e}")
     
-    # ============================================================================
-    # CRITICAL: POST-RENDER VALIDATION - SILENT FAILURES MUST BE IMPOSSIBLE
-    # ============================================================================
-    log("=" * 80)
-    log("🔍 Validating rendered video output...")
-    log("=" * 80)
-    
-    # Check if output file exists
-    if not output_file.exists():
-        error_msg = f"FATAL: Video rendering failed. {output_file} was not created."
-        log(error_msg, "ERROR")
-        raise RuntimeError(error_msg)
-    
-    # Check if output file is empty
-    if output_file.stat().st_size == 0:
-        error_msg = f"FATAL: Video rendering failed. {output_file} is empty."
-        log(error_msg, "ERROR")
-        raise RuntimeError(error_msg)
-    
-    # Check file size is reasonable (at least 100KB)
-    file_size_mb = output_file.stat().st_size / (1024 * 1024)
-    if file_size_mb < 0.1:  # Less than 100KB
-        error_msg = f"FATAL: Video file too small: {file_size_mb:.2f} MB. Likely corrupted."
-        log(error_msg, "ERROR")
-        raise RuntimeError(error_msg)
-    
-    log(f"✅ Video render validation successful. File size: {file_size_mb:.2f} MB")
-    
-    # Verify final output
+    # Step 8: Final validation
     if not render_success or not output_file.exists() or output_file.stat().st_size == 0:
         log(f"❌ Final video rendering failed", "ERROR")
         return None
     
-    # Add hook and CTA overlays if needed
-    if hook_file or cta_file:
-        log("🪝 Adding hook/CTA overlays...")
-        
-        # Build overlay command
-        overlay_filters = []
-        
-        if hook_file and Path(hook_file).exists():
-            try:
-                with open(hook_file, 'r', encoding='utf-8') as f:
-                    hook_data = json.load(f)
-                hook = hook_data.get('hook_options', [{}])[0]
-                hook_text = hook.get('text_overlay', '')
-                hook_text = re.sub(r'[^\w\s.,!?-]', '', hook_text)
-                hook_text = hook_text.replace("'", "\\'").replace(":", "\\:")
-                
-                if hook_text:
-                    overlay_filters.append(
-                        f"drawtext=fontfile={FONT_PATH}:"
-                        f"text='{hook_text}':"
-                        "fontcolor=yellow:"
-                        "fontsize=72:"
-                        "x=(w-text_w)/2:"
-                        "y=h*0.2:"
-                        "enable='between(t,0,3)':"
-                        "borderw=4:bordercolor=black"
-                    )
-            except Exception as e:
-                log(f"⚠️ Hook overlay failed: {e}")
-        
-        if cta_file and Path(cta_file).exists():
-            try:
-                with open(cta_file, 'r', encoding='utf-8') as f:
-                    cta_data = json.load(f)
-                cta = cta_data.get('cta_options', [{}])[0]
-                cta_text = cta.get('text_overlay', '')
-                cta_text = re.sub(r'[^\w\s.,!?-]', '', cta_text)
-                cta_text = cta_text.replace("'", "\\'").replace(":", "\\:")
-                
-                if cta_text:
-                    cta_start = max(0, duration - 5)
-                    overlay_filters.append(
-                        f"drawtext=fontfile={FONT_PATH}:"
-                        f"text='{cta_text}':"
-                        "fontcolor=white:"
-                        "fontsize=60:"
-                        "x=(w-text_w)/2:"
-                        "y=h*0.8:"
-                        f"enable='gte(t,{cta_start})':"
-                        "borderw=4:bordercolor=black"
-                    )
-            except Exception as e:
-                log(f"⚠️ CTA overlay failed: {e}")
-        
-        if overlay_filters:
-            final_output = output_dir / 'short_video_with_overlays.mp4'
-            # FIXED: Removed -r flag, added fps filter
-            cmd_overlay = [
-                'ffmpeg', '-y',
-                '-fflags', '+genpts',  # Regenerate timestamps
-                '-threads', '0',        # Optimal CPU utilization
-                '-i', str(output_file),
-                '-vf', ','.join(overlay_filters) + ',fps=30,format=yuv420p',
-                '-c:v', 'libx264', '-preset', 'medium',
-                '-crf', '18',
-                '-c:a', 'copy',
-                str(final_output)
-            ]
-            
-            try:
-                # FIXED: Use Popen with live progress output
-                process = subprocess.Popen(
-                    cmd_overlay,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                    universal_newlines=True
-                )
-                
-                log(f"📊 Adding overlays - showing live progress:")
-                log("-" * 80)
-                
-                start_time = time.time()
-                overlay_timeout = 300  # 5 minutes for overlay
-                
-                while True:
-                    line = process.stdout.readline()
-                    
-                    if line:
-                        print(line.strip())
-                        sys.stdout.flush()
-                    
-                    if process.poll() is not None:
-                        break
-                    
-                    if time.time() - start_time > overlay_timeout:
-                        process.kill()
-                        log(f"❌ Overlay addition timed out", "ERROR")
-                        break
-                
-                log("-" * 80)
-                
-                if process.returncode == 0 and final_output.exists() and final_output.stat().st_size > 0:
-                    shutil.move(str(final_output), str(output_file))
-                    log("✅ Overlays added successfully")
-                else:
-                    log(f"⚠️ Overlay addition failed with code {process.returncode}")
-            except Exception as e:
-                log(f"⚠️ Overlay addition failed: {e}")
-    
-    # ============================================================================
-    # STEP 4: STRICT AUDIO DURATION AUTHORITY ENFORCEMENT
-    # This runs AUTOMATICALLY after EVERY video render - NOT optional
-    # ============================================================================
+    # Step 9: Audio duration authority enforcement
     try:
-        log("=" * 80)
-        log("⚡ AUTOMATIC AUDIO DURATION AUTHORITY VALIDATION")
-        log("=" * 80)
-        
         validated_video = enforce_audio_duration_authority(output_file, audio_file)
-        
-        # Update output_file to validated version (should be same path)
         output_file = validated_video
-        
-        log("✅ Audio duration authority validation completed successfully")
-        
     except Exception as e:
-        log(f"❌ CRITICAL: Audio duration authority validation failed: {e}", "ERROR")
-        log(f"   Pipeline cannot proceed with invalid duration", "ERROR")
+        log(f"❌ Audio duration validation failed: {e}", "ERROR")
         return None
     
     # Cleanup
@@ -1507,76 +1143,23 @@ def edit_shorts_video(script_file: str, audio_file: str, clips_dir: str,
     if assembled_video.exists():
         assembled_video.unlink()
     
-    # Get final metadata for logging
+    # Final metadata
     final_audio_duration = get_audio_duration(audio_file)
     final_video_duration = get_video_duration(output_file)
-    
     size_mb = output_file.stat().st_size / (1024 * 1024)
-    log(f"✅ SHORTS video with HARD-BURNED subtitles and AUDIO complete")
+    
+    log(f"✅ SHORTS video complete")
     log(f"   Output: {output_file}")
     log(f"   Size: {size_mb:.2f} MB")
-    log(f"   Final video duration: {final_video_duration:.1f}s")
-    log(f"   AUDIO AUTHORITY: {final_audio_duration:.1f}s")
-    log(f"   Duration match: {'✓' if abs(final_video_duration - final_audio_duration) < 0.1 else '⚠️'}")
-    log(f"   FPS: 30 (normalized)")
-    log(f"   Subtitles: Hard-burned (permanent)")
-    log(f"   Font: {FONT_PATH}")
-    log(f"   Audio: Merged (AAC 192k)")
-    log(f"   Quality: CRF 18, preset medium, forced HD resolution")
-    log(f"   FPS Normalization: fps=30 filter (NO -r flag)")
-    log(f"   Clips used: {len(valid_clips)}")
-    
-    # Save metadata
-    try:
-        with open(manifest_file, 'r') as f:
-            manifest_data = json.load(f)
-    except:
-        manifest_data = {}
-    
-    metadata = {
-        'video_type': 'short',
-        'duration_seconds': final_video_duration,
-        'audio_authority_duration': final_audio_duration,
-        'duration_match': abs(final_video_duration - final_audio_duration) < 0.1,
-        'duration_difference': final_video_duration - final_audio_duration,
-        'file_size_mb': size_mb,
-        'fps': 30,
-        'resolution': f"{width}x{height}",
-        'quality_settings': {
-            'video_codec': 'libx264',
-            'crf': 18,
-            'preset': 'medium',
-            'audio_codec': 'aac',
-            'audio_bitrate': '192k',
-            'pixel_format': 'yuv420p',
-            'fps_normalization': 'filter (fps=30)'
-        },
-        'subtitles_type': 'hard_burned',
-        'subtitles_font': str(FONT_PATH),
-        'subtitles_size': SUBTITLE_FONTSIZE,
-        'subtitles_alignment': 'center',
-        'subtitles_outline': SUBTITLE_OUTLINE_WIDTH,
-        'subtitles_shadow': SUBTITLE_SHADOW,
-        'audio_included': True,
-        'audio_codec': 'AAC',
-        'hook_included': hook_file and Path(hook_file).exists(),
-        'cta_included': cta_file and Path(cta_file).exists(),
-        'clips_validated': len(valid_clips),
-        'manifest_pages': manifest_data.get('pages_searched', 1) if manifest_data else 1,
-        'audio_authority_validated': True,
-        'validation_timestamp': datetime.now().isoformat(),
-        'generated_at': datetime.now().isoformat()
-    }
-    
-    meta_file = output_dir / 'short_metadata.json'
-    with open(meta_file, 'w', encoding='utf-8') as f:
-        json.dump(metadata, f, indent=2)
+    log(f"   Duration: {final_video_duration:.1f}s")
+    log(f"   Resolution: 720x1280 (720p)")
+    log(f"   CRF: 23")
     
     return output_file
 
 
 # ============================================================================
-# ENHANCED LONG VIDEO EDITING WITH HARD SUBTITLES AND AUDIO - NO BLACK FALLBACK
+# FIXED: LONG VIDEO EDITING - SIMPLIFIED, NO UNNECESSARY LOOPS
 # ============================================================================
 
 def edit_long_video(script_file: str, audio_file: str, clips_dir: str, 
@@ -1585,27 +1168,19 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     """
     Edit LONG video using FFmpeg with HARD-BURNED subtitles and AUDIO
     
-    Features:
-    - Noto Sans Devanagari-Regular font for proper Hindi ligature rendering
-    - Center-aligned subtitles with outline and shadow
-    - Perfect sync with word-level subtitles
-    - Automatic clip looping to fill full audio duration
-    - Enhanced clip validation and shuffling
-    - ABSOLUTELY NO BLACK VIDEO - Fails safely if requirements not met
-    - AUDIO DURATION AUTHORITY - Final video must match audio duration exactly
-    - STRICT POST-RENDER VALIDATION - Automatically enforces audio duration match
-    - AUDIO ALWAYS MERGED - No silent videos
-    - ENHANCED QUALITY: CRF 18, forced HD resolution (1920x1080)
-    - FIXED: FPS normalization using fps filter (NO -r flag)
-    - FIXED: Font path handling (no double extension)
+    FIXED:
+    - Simple clip loading from manifest (no revalidation)
+    - Simple concat (no loops)
+    - Resolution fixed to 720p
+    - CRF 23 for balanced quality/size
     
     Args:
         script_file: Path to script JSON
-        audio_file: Path to audio WAV (audio_long.wav)
+        audio_file: Path to audio WAV
         clips_dir: Directory containing video clips
         run_id: Run identifier
         subtitles_file: Optional path to SRT subtitles
-        premium_subtitles: Parameter kept for compatibility (subtitles are always burned)
+        premium_subtitles: Parameter kept for compatibility
         
     Returns:
         Path to output video file or None if failed
@@ -1623,7 +1198,7 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     output_file = output_dir / 'final_video_long.mp4'
     
     # ============================================================================
-    # PRE-RENDER VALIDATION - CRITICAL DEBUG CHECK
+    # PRE-RENDER VALIDATION
     # ============================================================================
     log("=" * 80)
     log("🔍 PRE-RENDER VALIDATION")
@@ -1645,9 +1220,6 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     if clips_path.exists():
         clip_files = list(clips_path.glob('*.mp4'))
         log(f"Clips count: {len(clip_files)}")
-        if clip_files:
-            # Log first few clips for debugging
-            log(f"Sample clips: {', '.join([f.name for f in clip_files[:3]])}")
     
     log("=" * 80)
     
@@ -1656,75 +1228,38 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     target_duration = audio_duration
     log(f"🎯 AUDIO AUTHORITY target duration: {target_duration:.2f}s ({target_duration/60:.2f}m)")
     
-    # Load and verify manifest
+    # Step 2: Load clips from manifest (NO REVALIDATION)
     manifest_file = clips_path / 'manifest.json'
-    
-    # CRITICAL: Verify manifest integrity before proceeding
-    valid_clips, total_clips_duration, manifest_valid = verify_manifest_integrity(manifest_file, clips_path)
-    
-    if not manifest_valid:
-        error_msg = (
-            f"❌ FATAL: Manifest verification failed. Cannot proceed with video generation. "
-            f"No black video fallback allowed."
-        )
-        log(error_msg, "ERROR")
+    try:
+        valid_clips, total_clips_duration = load_clips_from_manifest(manifest_file, clips_path)
+    except Exception as e:
+        log(f"❌ Failed to load clips: {e}", "ERROR")
         return None
     
-    if not valid_clips:
-        error_msg = (
-            f"❌ FATAL: No valid clips found after verification. "
-            f"Cannot generate video without clips. No black video fallback allowed."
-        )
-        log(error_msg, "ERROR")
-        return None
+    # Step 3: Create simple concat file (NO LOOPS)
+    concat_file = create_simple_concat_file(valid_clips, output_dir, run_id)
     
-    # CRITICAL: Verify total duration meets requirement
-    if total_clips_duration < target_duration:
-        error_msg = (
-            f"❌ FATAL: Total clip duration ({total_clips_duration:.1f}s) "
-            f"is less than AUDIO AUTHORITY target ({target_duration:.1f}s). "
-            f"Cannot generate video without black sections. "
-            f"Asset acquisition must fetch more clips."
-        )
-        log(error_msg, "ERROR")
-        return None
-    
-    # Calculate loop count
-    loop_count = math.ceil(target_duration / total_clips_duration)
-    
-    log(f"🔄 Loop count needed: {loop_count}")
-    log(f"   Each loop: {total_clips_duration:.1f}s of unique footage")
-    log(f"   Total after {loop_count} loops: {total_clips_duration * loop_count:.1f}s")
-    
-    # Create optimized concat file with shuffled clips
-    # FIXED: This now properly loops until target duration is met
-    concat_file = create_optimized_concat_file(valid_clips, output_dir, run_id, target_duration)
-    
-    # Base FFmpeg command for concatenated clips
-    # FIXED: REMOVED -r flag, added fps filter for normalization
-    # FIXED: REMOVED -shortest flag which was causing frame duplication
-    # FIXED: Added +genpts for timestamp regeneration
+    # Step 4: Assemble video
     cmd = [
         'ffmpeg', '-y',
-        '-fflags', '+genpts',  # Regenerate timestamps
-        '-threads', '0',        # Optimal CPU utilization
-        '-f', 'concat', '-safe', '0', '-i', str(concat_file),
+        '-fflags', '+genpts',
+        '-threads', '0',
+        '-f', 'concat',
+        '-safe', '0',
+        '-i', str(concat_file),
         '-i', audio_file,
-        '-vf', 'fps=30,format=yuv420p',  # FIX: FPS normalization filter
+        '-vf', 'fps=30,format=yuv420p',
         '-c:v', 'libx264',
         '-preset', 'medium',
-        '-crf', '18',
-        '-c:a', 'aac', '-b:a', '192k',
+        '-crf', '23',  # UPDATED: CRF 23 for better file size
+        '-c:a', 'aac',
+        '-b:a', '192k',
         '-pix_fmt', 'yuv420p',
-        # REMOVED: -shortest - trimmed to audio duration later
-        # REMOVED: -r flag - handled by fps filter
         str(assembled_video)
     ]
     
-    # Execute first pass (video assembly) - FIXED WITH PROPER TIMEOUT AND LIVE PROGRESS
-    log("🎬 Assembling video with HD quality settings...")
+    log("🎬 Assembling video...")
     try:
-        # FIXED: Use Popen with live progress output
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -1738,11 +1273,10 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
         log("-" * 80)
         
         start_time = time.time()
-        assembly_timeout = 10800  # 3 hours for long video assembly
+        assembly_timeout = 7200  # 2 hours for long videos
         
         while True:
             line = process.stdout.readline()
-            
             if line:
                 print(line.strip())
                 sys.stdout.flush()
@@ -1752,7 +1286,7 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
             
             if time.time() - start_time > assembly_timeout:
                 process.kill()
-                log(f"❌ Video assembly timed out after {assembly_timeout/3600:.1f} hours", "ERROR")
+                log(f"❌ Video assembly timed out after 2 hours", "ERROR")
                 return None
         
         log("-" * 80)
@@ -1766,102 +1300,63 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
         log(f"❌ Video assembly failed: {e}")
         return None
     
-    # Verify assembled video exists and has content
+    # Verify assembled video
     if not assembled_video.exists() or assembled_video.stat().st_size == 0:
         log(f"❌ Assembled video is empty or missing", "ERROR")
         return None
     
-    # Step 2: Get assembled video duration
+    # Step 5: Get assembled video duration
     assembled_duration = get_video_duration(assembled_video)
     log(f"📊 Assembled video duration: {assembled_duration:.3f}s")
     log(f"📊 AUDIO AUTHORITY duration: {target_duration:.3f}s")
     
-    # Step 3: AUDIO DURATION AUTHORITY ENFORCEMENT (initial pass)
-    # Case 1: Video longer than audio - TRIM EXACTLY to audio duration
+    # Step 6: Trim if needed
     if assembled_duration > target_duration:
         log(f"⚠️ Video is longer than audio by {assembled_duration - target_duration:.3f}s")
-        log(f"✂️ Trimming video to match AUDIO AUTHORITY exactly...")
+        log(f"✂️ Trimming video to match AUDIO AUTHORITY...")
         
         trim_success = trim_video_to_audio_duration(assembled_video, temp_video, target_duration)
         if not trim_success:
-            log(f"❌ Failed to trim video to audio duration", "ERROR")
+            log(f"❌ Failed to trim video", "ERROR")
             return None
-        
-        # Update reference for subtitle processing
         video_for_subtitles = temp_video
-        final_duration = target_duration
-        
-    # Case 2: Video shorter than audio - Check tolerance
-    elif assembled_duration < target_duration:
-        difference = target_duration - assembled_duration
-        log(f"⚠️ Video is shorter than audio by {difference:.3f}s")
-        
-        if difference > 0.5:
-            # Difference > 0.5s - raise validation warning but continue
-            log(f"⚠️ VALIDATION WARNING: Video shorter than audio by {difference:.3f}s (exceeds 0.5s tolerance)", "WARNING")
-            log(f"   This may cause audio/video desync. Consider increasing clip duration in asset acquisition.")
-        
-        # Use assembled video as-is (no trim needed)
-        shutil.copy2(assembled_video, temp_video)
-        video_for_subtitles = temp_video
-        final_duration = assembled_duration
-        
     else:
-        # Exact match - perfect
-        log(f"✅ Video duration exactly matches AUDIO AUTHORITY!")
         shutil.copy2(assembled_video, temp_video)
         video_for_subtitles = temp_video
-        final_duration = assembled_duration
     
-    # Get video metadata (for logging only)
-    width, height, duration, is_short, fps = get_video_metadata(video_for_subtitles)
-    log(f"📹 Video metadata: {width}x{height}, {duration:.1f}s, {fps:.1f}fps")
-    
-    # Render final video with HARD-BURNED subtitles and AUDIO
+    # Step 7: Render with subtitles
     render_success = False
     
-    # Always burn subtitles if SRT file exists
-    subtitles_srt_path = None
     if subtitles_file and Path(subtitles_file).exists():
-        subtitles_srt_path = Path(subtitles_file)
-        log(f"📝 Found subtitles file: {subtitles_srt_path}")
-        
-        # Render with hard-burned subtitles and audio
         render_success = render_video_with_hard_subtitles(
             video_for_subtitles,
             output_file,
-            subtitles_srt_path,
-            audio_file,  # Pass audio file for merging
-            duration,
+            Path(subtitles_file),
+            audio_file,
+            target_duration,
             'long'
         )
     else:
-        # No subtitles, just encode with audio
-        log("⚠️ No subtitles file found, rendering without subtitles but with audio")
-        
-        # Encode with high quality settings (no subtitles)
-        # FIXED: Removed -r flag, added fps filter
+        # Render without subtitles
         cmd_encode = [
             'ffmpeg', '-y',
-            '-fflags', '+genpts',  # Regenerate timestamps
-            '-threads', '0',        # Optimal CPU utilization
+            '-fflags', '+genpts',
+            '-threads', '0',
             '-i', str(video_for_subtitles),
-            '-i', str(audio_file),
+            '-i', audio_file,
             '-map', '0:v:0',
             '-map', '1:a:0',
-            '-vf', 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,fps=30,format=yuv420p',  # FIX: fps filter
-            '-c:v', 'libx264',  # Always re-encode for quality
+            '-vf', 'scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,fps=30,format=yuv420p',
+            '-c:v', 'libx264',
             '-preset', 'medium',
-            '-crf', '18',  # Visually lossless
+            '-crf', '23',
             '-c:a', 'aac',
             '-b:a', '192k',
             '-pix_fmt', 'yuv420p',
-            # REMOVED: -shortest - trimmed to audio duration
             str(output_file)
         ]
         
         try:
-            # FIXED: Use Popen with live progress output
             process = subprocess.Popen(
                 cmd_encode,
                 stdout=subprocess.PIPE,
@@ -1875,11 +1370,10 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
             log("-" * 80)
             
             start_time = time.time()
-            encoding_timeout = 4500  # 75 minutes for long videos
+            encoding_timeout = 7200  # 2 hours
             
             while True:
                 line = process.stdout.readline()
-                
                 if line:
                     print(line.strip())
                     sys.stdout.flush()
@@ -1889,8 +1383,7 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
                 
                 if time.time() - start_time > encoding_timeout:
                     process.kill()
-                    log(f"❌ Encoding timed out after {encoding_timeout/60:.1f} minutes", "ERROR")
-                    render_success = False
+                    log(f"❌ Encoding timed out", "ERROR")
                     break
             
             log("-" * 80)
@@ -1898,65 +1391,22 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
             if process.returncode == 0:
                 render_success = True
             else:
-                log(f"❌ Failed to encode video with audio (code {process.returncode})")
-                render_success = False
+                log(f"❌ Failed to encode video")
                 
         except Exception as e:
-            log(f"❌ Failed to encode video with audio: {e}")
-            render_success = False
+            log(f"❌ Failed to encode video: {e}")
     
-    # ============================================================================
-    # CRITICAL: POST-RENDER VALIDATION - SILENT FAILURES MUST BE IMPOSSIBLE
-    # ============================================================================
-    log("=" * 80)
-    log("🔍 Validating rendered video output...")
-    log("=" * 80)
-    
-    # Check if output file exists
-    if not output_file.exists():
-        error_msg = f"FATAL: Video rendering failed. {output_file} was not created."
-        log(error_msg, "ERROR")
-        raise RuntimeError(error_msg)
-    
-    # Check if output file is empty
-    if output_file.stat().st_size == 0:
-        error_msg = f"FATAL: Video rendering failed. {output_file} is empty."
-        log(error_msg, "ERROR")
-        raise RuntimeError(error_msg)
-    
-    # Check file size is reasonable (at least 100KB)
-    file_size_mb = output_file.stat().st_size / (1024 * 1024)
-    if file_size_mb < 0.1:  # Less than 100KB
-        error_msg = f"FATAL: Video file too small: {file_size_mb:.2f} MB. Likely corrupted."
-        log(error_msg, "ERROR")
-        raise RuntimeError(error_msg)
-    
-    log(f"✅ Video render validation successful. File size: {file_size_mb:.2f} MB")
-    
-    # Verify final output
+    # Step 8: Final validation
     if not render_success or not output_file.exists() or output_file.stat().st_size == 0:
         log(f"❌ Final video rendering failed", "ERROR")
         return None
     
-    # ============================================================================
-    # STEP 4: STRICT AUDIO DURATION AUTHORITY ENFORCEMENT
-    # This runs AUTOMATICALLY after EVERY video render - NOT optional
-    # ============================================================================
+    # Step 9: Audio duration authority enforcement
     try:
-        log("=" * 80)
-        log("⚡ AUTOMATIC AUDIO DURATION AUTHORITY VALIDATION")
-        log("=" * 80)
-        
         validated_video = enforce_audio_duration_authority(output_file, audio_file)
-        
-        # Update output_file to validated version (should be same path)
         output_file = validated_video
-        
-        log("✅ Audio duration authority validation completed successfully")
-        
     except Exception as e:
-        log(f"❌ CRITICAL: Audio duration authority validation failed: {e}", "ERROR")
-        log(f"   Pipeline cannot proceed with invalid duration", "ERROR")
+        log(f"❌ Audio duration validation failed: {e}", "ERROR")
         return None
     
     # Cleanup
@@ -1965,69 +1415,17 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
     if assembled_video.exists():
         assembled_video.unlink()
     
-    # Get final metadata for logging
+    # Final metadata
     final_audio_duration = get_audio_duration(audio_file)
     final_video_duration = get_video_duration(output_file)
-    
     size_mb = output_file.stat().st_size / (1024 * 1024)
-    log(f"✅ LONG video with HARD-BURNED subtitles and AUDIO complete")
+    
+    log(f"✅ LONG video complete")
     log(f"   Output: {output_file}")
     log(f"   Size: {size_mb:.2f} MB")
-    log(f"   Final video duration: {final_video_duration:.1f}s ({final_video_duration/60:.2f}m)")
-    log(f"   AUDIO AUTHORITY: {final_audio_duration:.1f}s")
-    log(f"   Duration match: {'✓' if abs(final_video_duration - final_audio_duration) < 0.1 else '⚠️'}")
-    log(f"   FPS: 30 (normalized)")
-    log(f"   Subtitles: Hard-burned (permanent)")
-    log(f"   Font: {FONT_PATH}")
-    log(f"   Audio: Merged (AAC 192k)")
-    log(f"   Quality: CRF 18, preset medium, forced HD resolution")
-    log(f"   FPS Normalization: fps=30 filter (NO -r flag)")
-    log(f"   Clips used: {len(valid_clips)}")
-    
-    # Save metadata
-    try:
-        with open(manifest_file, 'r') as f:
-            manifest_data = json.load(f)
-    except:
-        manifest_data = {}
-    
-    metadata = {
-        'video_type': 'long',
-        'duration_seconds': final_video_duration,
-        'duration_minutes': final_video_duration/60,
-        'audio_authority_duration': final_audio_duration,
-        'duration_match': abs(final_video_duration - final_audio_duration) < 0.1,
-        'duration_difference': final_video_duration - final_audio_duration,
-        'file_size_mb': size_mb,
-        'fps': 30,
-        'resolution': f"{width}x{height}",
-        'quality_settings': {
-            'video_codec': 'libx264',
-            'crf': 18,
-            'preset': 'medium',
-            'audio_codec': 'aac',
-            'audio_bitrate': '192k',
-            'pixel_format': 'yuv420p',
-            'fps_normalization': 'filter (fps=30)'
-        },
-        'subtitles_type': 'hard_burned',
-        'subtitles_font': str(FONT_PATH),
-        'subtitles_size': SUBTITLE_FONTSIZE,
-        'subtitles_alignment': 'center',
-        'subtitles_outline': SUBTITLE_OUTLINE_WIDTH,
-        'subtitles_shadow': SUBTITLE_SHADOW,
-        'audio_included': True,
-        'audio_codec': 'AAC',
-        'clips_validated': len(valid_clips),
-        'manifest_pages': manifest_data.get('pages_searched', 1) if manifest_data else 1,
-        'audio_authority_validated': True,
-        'validation_timestamp': datetime.now().isoformat(),
-        'generated_at': datetime.now().isoformat()
-    }
-    
-    meta_file = output_dir / 'long_metadata.json'
-    with open(meta_file, 'w', encoding='utf-8') as f:
-        json.dump(metadata, f, indent=2)
+    log(f"   Duration: {final_video_duration:.1f}s ({final_video_duration/60:.2f}m)")
+    log(f"   Resolution: 1280x720 (720p)")
+    log(f"   CRF: 23")
     
     return output_file
 
@@ -2037,7 +1435,7 @@ def edit_long_video(script_file: str, audio_file: str, clips_dir: str,
 # ============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description='Edit video with HARD-BURNED subtitles - NO BLACK VIDEO FALLBACK - AUDIO DURATION AUTHORITY - ENHANCED QUALITY')
+    parser = argparse.ArgumentParser(description='Edit video with HARD-BURNED subtitles - FIXED VERSION')
     parser.add_argument('--type', choices=['long', 'short'], required=True,
                        help='Video type (long form or short)')
     parser.add_argument('--script-file', required=True,
@@ -2056,31 +1454,18 @@ def main():
                        help='Optional hook JSON for shorts')
     parser.add_argument('--cta-file', default=None,
                        help='Optional CTA JSON for shorts')
-    parser.add_argument('--premium', action='store_true', default=True,
-                       help='Parameter kept for compatibility (subtitles are always burned)')
-    parser.add_argument('--no-premium', action='store_false', dest='premium',
-                       help='Parameter kept for compatibility')
     
     args = parser.parse_args()
     
     log("=" * 80)
     log(f"🎬 HARD-BURNED SUBTITLE RENDERING - {args.type.upper()}")
-    log(f"   BLACK VIDEO FALLBACK: DISABLED")
-    log(f"   AUDIO DURATION AUTHORITY: ENABLED")
-    log(f"   POST-RENDER VALIDATION: AUTOMATIC (ALWAYS RUNS)")
-    log(f"   QUALITY SETTINGS: CRF 18, PRESET MEDIUM, FORCED HD RESOLUTION")
-    log(f"   AUDIO QUALITY: AAC 192k")
-    log(f"   SUBTITLE FONT: {FONT_PATH} (explicit font file)")
-    log(f"   AUDIO MERGE: ENABLED (CRITICAL FIX)")
-    log(f"   FPS NORMALIZATION: fps=30 filter (NO -r flag, NO frame duplication)")
-    log(f"   FFMPEG FIXES: +genpts (timestamp regeneration), threads 0 (optimal CPU)")
-    log(f"   FFMPEG PROGRESS: LIVE OUTPUT ENABLED (no more freezing)")
-    log(f"   FFMPEG TIMEOUTS: Shorts=45min, Long=75min (safe limits)")
-    log(f"   SUBTITLE FILTER: Pure SRT input, absolute paths, proper escaping")
-    log(f"   CONCAT FIX: Dynamic looping ensures duration >= target, removed -shortest")
+    log(f"   RESOLUTION: 720p (fixed)")
+    log(f"   CRF: 23 (balanced quality/size)")
+    log(f"   NO DOUBLE VALIDATION - Trusting acquire_assets")
+    log(f"   NO UNNECESSARY LOOPING - Simple concat")
     log("=" * 80)
     
-    # Step 1: Dynamically find audio file if not specified
+    # Find audio file if not specified
     if args.audio_file is None:
         try:
             audio_file = find_latest_audio_file(args.audio_dir, args.type)
@@ -2112,8 +1497,7 @@ def main():
             args.run_id,
             args.subtitles_file if Path(args.subtitles_file).exists() else None,
             args.hook_file,
-            args.cta_file,
-            args.premium  # Kept for compatibility
+            args.cta_file
         )
     else:
         output_file = edit_long_video(
@@ -2121,26 +1505,14 @@ def main():
             audio_file,
             args.clips_dir,
             args.run_id,
-            args.subtitles_file if Path(args.subtitles_file).exists() else None,
-            args.premium  # Kept for compatibility
+            args.subtitles_file if Path(args.subtitles_file).exists() else None
         )
     
     if output_file:
-        log(f"✅ {args.type.upper()} video with HARD-BURNED subtitles and AUDIO created successfully")
-        log(f"   Output: {output_file}")
-        log(f"   AUDIO DURATION AUTHORITY enforced - final video matches audio")
-        log(f"   QUALITY SETTINGS applied - CRF 18, forced HD resolution")
-        log(f"   FPS NORMALIZATION applied - fps=30 filter (NO frame duplication)")
-        log(f"   Subtitles permanently burned into video frames using {FONT_PATH}")
-        log(f"   Devanagari ligatures rendered properly (क्या, not क् या)")
-        log(f"   AUDIO merged successfully - NO SILENT VIDEOS")
-        log(f"   FFMPEG FIXES applied - live progress shown, no freezing, correct timeouts")
-        log(f"   SUBTITLE FILTER: Pure SRT input, absolute paths, proper escaping")
-        log(f"   CONCAT GENERATION FIXED: Dynamic looping ensures proper duration")
+        log(f"✅ {args.type.upper()} video created successfully")
         sys.exit(0)
     else:
-        log(f"❌ FATAL: {args.type.upper()} video creation failed - no video generated")
-        log(f"   This is a SAFE FAILURE - no black video was created")
+        log(f"❌ FATAL: {args.type.upper()} video creation failed")
         sys.exit(1)
 
 
