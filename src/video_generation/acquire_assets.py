@@ -5,6 +5,7 @@ Uses open search strategy with NATURE PRIORITY and RANDOMIZED SELECTION
 Includes strict video validation to reject static images and low-quality clips
 TRUE RANDOMIZATION - Random queries, random pages, random clip selection
 AUDIO DURATION AUTHORITY - Uses ACTUAL audio file duration as single source of truth
+UPDATED: Resolution fixed to 720p for both long and short videos
 """
 import os
 import json
@@ -177,9 +178,11 @@ MIN_FPS = 24.0
 MIN_FRAME_COUNT = 72
 MIN_FILE_SIZE = 200000  # bytes - INCREASED for better quality
 MAX_RETRIES_PER_CLIP = 5  # Maximum attempts to find valid clip
+
+# UPDATED: Resolution fixed to 720p for both long and short videos
 MIN_ACCEPTABLE_RESOLUTION = {
-    'long': {'width': 1280, 'height': 720},  # Minimum 720p for long videos
-    'short': {'width': 720, 'height': 1280}   # Minimum 720p portrait for shorts
+    'long': {'width': 1280, 'height': 720},   # 720p landscape
+    'short': {'width': 720, 'height': 1280}    # 720p portrait
 }
 
 # Output directories
@@ -656,6 +659,11 @@ def verify_and_repair_manifest(manifest_path: Path, clips_dir: Path, video_type:
     Verify all clips in manifest exist and are valid.
     Remove invalid clips and return updated list and total duration.
     
+    Args:
+        manifest_path: Path to manifest file
+        clips_dir: Directory containing clips
+        video_type: 'long' or 'short' for validation
+        
     Returns:
         Tuple of (valid_clips_list, total_duration)
     """
