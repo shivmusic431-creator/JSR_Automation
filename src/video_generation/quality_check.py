@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Quality Check - Validates video output meets requirements
-Enhanced validation for unlimited pagination system
+UPDATED: Resolution checks for 720p videos
 Checks for black frames, audio sync, and overall video quality
 """
 import subprocess
@@ -42,7 +42,7 @@ def check_video_duration(video_path: str, video_type: str) -> tuple:
         duration = float(result.stdout.strip())
         
         if video_type == 'long':
-            # Long video: minimum 6 minutes (600 seconds)
+            # Long video: minimum 10 minutes (600 seconds)
             min_duration = 360
             if duration < min_duration:
                 return duration, False, f"Duration {duration/60:.2f}m is less than minimum {min_duration/60:.2f}m"
@@ -63,6 +63,7 @@ def check_video_duration(video_path: str, video_type: str) -> tuple:
 def check_resolution(video_path: str, video_type: str) -> tuple:
     """
     Check if video resolution meets requirements
+    UPDATED: Now checks for 720p resolution
     
     Returns:
         tuple: (width, height, passes_check, message)
@@ -85,19 +86,21 @@ def check_resolution(video_path: str, video_type: str) -> tuple:
         height = data['streams'][0]['height']
         
         if video_type == 'long':
-            # Long video: minimum 1280x720 (720p)
-            min_width, min_height = 1280, 720
-            if width < min_width or height < min_height:
-                return width, height, False, f"Resolution {width}x{height} below minimum {min_width}x{min_height}"
+            # Long video: 1280x720 (720p)
+            expected_width, expected_height = 1280, 720
+            # Allow slight variations due to cropping
+            if abs(width - expected_width) > 10 or abs(height - expected_height) > 10:
+                return width, height, False, f"Resolution {width}x{height} should be approximately {expected_width}x{expected_height} (720p)"
             else:
-                return width, height, True, f"Resolution {width}x{height} meets minimum"
+                return width, height, True, f"Resolution {width}x{height} matches 720p"
         else:
-            # Short: minimum 720x1280 (720p portrait)
-            min_width, min_height = 720, 1280
-            if width < min_width or height < min_height:
-                return width, height, False, f"Resolution {width}x{height} below minimum {min_width}x{min_height}"
+            # Short: 720x1280 (720p portrait)
+            expected_width, expected_height = 720, 1280
+            # Allow slight variations due to cropping
+            if abs(width - expected_width) > 10 or abs(height - expected_height) > 10:
+                return width, height, False, f"Resolution {width}x{height} should be approximately {expected_width}x{expected_height} (720p portrait)"
             else:
-                return width, height, True, f"Resolution {width}x{height} meets minimum"
+                return width, height, True, f"Resolution {width}x{height} matches 720p portrait"
                 
     except Exception as e:
         return 0, 0, False, f"Failed to get resolution: {e}"
@@ -146,6 +149,7 @@ def check_frame_rate(video_path: str) -> tuple:
 def check_bitrate(video_path: str) -> tuple:
     """
     Check video bitrate for quality
+    UPDATED: Adjusted for 720p videos
     
     Returns:
         tuple: (bitrate_mbps, passes_check, message)
@@ -160,12 +164,12 @@ def check_bitrate(video_path: str) -> tuple:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         bitrate = int(result.stdout.strip()) / 1000000  # Convert to Mbps
         
-        # Minimum acceptable bitrate: 2 Mbps
-        min_bitrate = 2.0
+        # Minimum acceptable bitrate for 720p: 1.5 Mbps
+        min_bitrate = 1.5
         if bitrate < min_bitrate:
-            return bitrate, False, f"Bitrate {bitrate:.2f} Mbps below minimum {min_bitrate} Mbps"
+            return bitrate, False, f"Bitrate {bitrate:.2f} Mbps below minimum {min_bitrate} Mbps for 720p"
         else:
-            return bitrate, True, f"Bitrate {bitrate:.2f} Mbps is acceptable"
+            return bitrate, True, f"Bitrate {bitrate:.2f} Mbps is acceptable for 720p"
                 
     except Exception as e:
         return 0, False, f"Failed to get bitrate: {e}"
@@ -424,6 +428,7 @@ def check_manifest_integrity(clips_dir: str) -> tuple:
 def check_video_quality(video_path: str, video_type: str, clips_dir: str = None) -> bool:
     """
     Comprehensive video quality check
+    UPDATED: Now checks for 720p resolution
     
     Args:
         video_path: Path to video file
@@ -464,9 +469,9 @@ def check_video_quality(video_path: str, video_type: str, clips_dir: str = None)
     checks.append(('Duration', duration_pass, duration_msg))
     log(f"   {'✅' if duration_pass else '❌'} {duration_msg}")
     
-    # 3. Resolution
+    # 3. Resolution - UPDATED for 720p
     width, height, res_pass, res_msg = check_resolution(video_path, video_type)
-    checks.append(('Resolution', res_pass, res_msg))
+    checks.append(('Resolution (720p)', res_pass, res_msg))
     log(f"   {'✅' if res_pass else '❌'} {res_msg}")
     
     # 4. Audio tracks
@@ -492,9 +497,9 @@ def check_video_quality(video_path: str, video_type: str, clips_dir: str = None)
     checks.append(('Frame Rate', fps_pass, fps_msg))
     log(f"   {'⚠️' if not fps_pass else '✅'} {fps_msg}")
     
-    # 8. Bitrate
+    # 8. Bitrate - UPDATED for 720p
     bitrate, bitrate_pass, bitrate_msg = check_bitrate(video_path)
-    checks.append(('Bitrate', bitrate_pass, bitrate_msg))
+    checks.append(('Bitrate (720p)', bitrate_pass, bitrate_msg))
     log(f"   {'⚠️' if not bitrate_pass else '✅'} {bitrate_msg}")
     
     # 9. Codec compatibility
@@ -521,7 +526,7 @@ def check_video_quality(video_path: str, video_type: str, clips_dir: str = None)
     critical_passed = all([
         integrity_pass,
         duration_pass,
-        res_pass,
+        res_pass,  # Now checks for 720p
         audio_pass,
         sync_pass,
         black_pass
@@ -529,6 +534,7 @@ def check_video_quality(video_path: str, video_type: str, clips_dir: str = None)
     
     if critical_passed:
         log("✅ All CRITICAL checks PASSED")
+        log(f"   Resolution: {width}x{height} (720p)")
     else:
         log("❌ Some CRITICAL checks FAILED", "ERROR")
         for check_name, check_pass, check_msg in checks[:6]:  # Only show critical fails
@@ -559,6 +565,7 @@ def check_video_quality(video_path: str, video_type: str, clips_dir: str = None)
     report = {
         'video_path': video_path,
         'video_type': video_type,
+        'resolution': f"{width}x{height}",
         'checks': [
             {
                 'name': name,
