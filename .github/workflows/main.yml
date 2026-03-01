@@ -1,4 +1,4 @@
-name: YT-AutoPilot - Video Production Pipeline
+name: YT-AutoPilot - Viral Shorts Production Pipeline
 
 on:
   repository_dispatch:
@@ -20,7 +20,10 @@ on:
       channel_id:
         description: 'YouTube Channel ID for Upload'
         required: true
-        default: 'UCxxxxxxxxxxxxxxxxxxxxxxxxxx'
+      channel_index:
+        description: 'Channel Index (for multi-voice selection)'
+        required: false
+        default: '0'
       is_retry:
         description: 'Is Retry'
         default: 'false'
@@ -37,16 +40,17 @@ env:
   SUB_CATEGORY: ${{ github.event.inputs.sub_category || github.event.client_payload.sub_category }}
   EPISODE: ${{ github.event.inputs.episode || github.event.client_payload.episode }}
   CHANNEL_ID: ${{ github.event.inputs.channel_id || github.event.client_payload.channel_id }}
+  CHANNEL_INDEX: ${{ github.event.inputs.channel_index || github.event.client_payload.channel_index || '0' }}
   IS_RETRY: ${{ github.event.inputs.is_retry || github.event.client_payload.is_retry || 'false' }}
   ATTEMPT: ${{ github.event.inputs.attempt || github.event.client_payload.attempt || '1' }}
   TIER1_WEBHOOK_URL: ${{ secrets.TIER1_WEBHOOK_URL }}
   TIER1_HEALTH_URL: ${{ secrets.TIER1_HEALTH_URL }}
 
 jobs:
-  # Phase 1: Long Script Generation
-  generate-script-long:
+  # Phase 1: Viral Shorts Script Generation
+  generate-script:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 30
     outputs:
       script_data: ${{ steps.script.outputs.script_data }}
     steps:
@@ -62,7 +66,7 @@ jobs:
         run: |
           pip install -r src/video_generation/requirements.txt
 
-      - name: Generate Long Script
+      - name: Generate Viral Shorts Script
         id: script
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -72,14 +76,14 @@ jobs:
             --sub-category "$SUB_CATEGORY" \
             --episode "$EPISODE" \
             --run-id "$RUN_ID" \
-            --video-type long
+            --channel-id "$CHANNEL_ID"
 
       - name: Generate Title
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           python src/prompts/generate_title.py \
-            --script-file output/script_long.json \
+            --script-file output/script_short.json \
             --run-id "$RUN_ID"
 
       - name: Generate Description
@@ -87,7 +91,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           python src/prompts/generate_description.py \
-            --script-file output/script_long.json \
+            --script-file output/script_short.json \
             --run-id "$RUN_ID"
 
       - name: Generate Thumbnail Concept
@@ -95,63 +99,13 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           python src/prompts/generate_thumbnail_concept.py \
-            --script-file output/script_long.json \
+            --script-file output/script_short.json \
             --run-id "$RUN_ID"
 
-      - name: Upload Long Script Artifact
+      - name: Upload Script Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: script-long-${{ env.RUN_ID }}
-          path: output/script_long.json
-          retention-days: 1
-
-      - name: Notify Tier 1
-        if: always()
-        env:
-          TIER1_WEBHOOK_URL: ${{ secrets.TIER1_WEBHOOK_URL }}
-          TIER1_HEALTH_URL: ${{ secrets.TIER1_HEALTH_URL }}
-        run: |
-          python src/video_generation/notify_webhook.py \
-            --action "long_script_generated" \
-            --run-id "$RUN_ID" \
-            --status "${{ job.status }}"
-
-  # Phase 1.5: Short Script Generation (COMPLETELY SEPARATE)
-  generate-script-short:
-    runs-on: ubuntu-latest
-    needs: generate-script-long
-    timeout-minutes: 10
-    outputs:
-      script_data: ${{ steps.script.outputs.script_data }}
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install Dependencies
-        run: |
-          pip install -r src/video_generation/requirements.txt
-
-      - name: Generate Short Script
-        id: script
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: |
-          python src/video_generation/generate_script.py \
-            --category "$MAIN_CATEGORY" \
-            --sub-category "$SUB_CATEGORY" \
-            --episode "$EPISODE" \
-            --run-id "$RUN_ID" \
-            --video-type short
-
-      - name: Upload Short Script Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: script-short-${{ env.RUN_ID }}
+          name: script-${{ env.RUN_ID }}
           path: output/script_short.json
           retention-days: 1
 
@@ -162,15 +116,16 @@ jobs:
           TIER1_HEALTH_URL: ${{ secrets.TIER1_HEALTH_URL }}
         run: |
           python src/video_generation/notify_webhook.py \
-            --action "short_script_generated" \
+            --action "script_generated" \
             --run-id "$RUN_ID" \
-            --status "${{ job.status }}"
+            --status "${{ job.status }}" \
+            --channel-id "$CHANNEL_ID"
 
-  # Phase 2: Long Audio Generation with XTTS v2
-  generate-audio-long:
+  # Phase 2: Audio Generation with Multi-Voice Support
+  generate-audio:
     runs-on: ubuntu-latest
-    needs: generate-script-long
-    timeout-minutes: 360
+    needs: generate-script
+    timeout-minutes: 60
     outputs:
       audio_duration: ${{ steps.audio.outputs.duration }}
     steps:
@@ -209,107 +164,72 @@ jobs:
           python -c "from TTS.api import TTS; print('✅ XTTS imported successfully')"
           python -c "print('✅ XTTS v2 ready')"
 
-      - name: Download Long Script Artifact
+      - name: Download Script Artifact
         uses: actions/download-artifact@v4
         with:
-          name: script-long-${{ env.RUN_ID }}
+          name: script-${{ env.RUN_ID }}
           path: output/
 
-      - name: Generate Long Audio with XTTS v2
-        id: audio
+      - name: Setup Multi-Voice Configuration
+        id: voice_setup
         run: |
-          python src/video_generation/generate_audio.py \
-            --script-file output/script_long.json \
-            --run-id "$RUN_ID" \
-            --script-type long
-
-      - name: Validate Long Audio Duration
-        run: |
-          python src/video_generation/validate_duration.py \
-            --audio-file output/audio_long.wav \
-            --min-duration 600 \
-            --run-id "$RUN_ID"
-
-      - name: Upload Long Audio Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: audio-long-${{ env.RUN_ID }}
-          path: output/audio_long.wav
-          retention-days: 1
-
-      - name: Notify Tier 1
-        if: always()
-        env:
-          TIER1_WEBHOOK_URL: ${{ secrets.TIER1_WEBHOOK_URL }}
-          TIER1_HEALTH_URL: ${{ secrets.TIER1_HEALTH_URL }}
-        run: |
-          python src/video_generation/notify_webhook.py \
-            --action "long_audio_generated" \
-            --run-id "$RUN_ID" \
-            --status "${{ job.status }}"
-
-  # Phase 2.5: Short Audio Generation with XTTS v2 (COMPLETELY SEPARATE)
-  generate-audio-short:
-    runs-on: ubuntu-latest
-    needs: generate-script-short
-    timeout-minutes: 30
-    outputs:
-      audio_duration: ${{ steps.audio.outputs.duration }}
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+          CHANNEL_IDX="${{ env.CHANNEL_INDEX }}"
+          echo "Channel Index: $CHANNEL_IDX"
           
-      - name: Install Dependencies
-        run: |
-          pip install -r src/video_generation/requirements.txt
+          # Check for voice files with pattern voice{N}.wav
+          VOICE_FILES=()
+          for f in voices/voice*.wav; do
+            if [ -f "$f" ]; then
+              VOICE_FILES+=("$f")
+            fi
+          done
+          
+          VOICE_COUNT=${#VOICE_FILES[@]}
+          echo "Found $VOICE_COUNT voice files"
+          
+          if [ $VOICE_COUNT -eq 0 ]; then
+            echo "⚠️ No voice files found, using default my_voice.wav"
+            echo "voice_file=voices/my_voice.wav" >> $GITHUB_OUTPUT
+          else
+            # Try to get voice for this channel index
+            TARGET_VOICE="voices/voice$((CHANNEL_IDX + 1)).wav"
+            
+            if [ -f "$TARGET_VOICE" ]; then
+              echo "✅ Using voice for channel $CHANNEL_IDX: $TARGET_VOICE"
+              echo "voice_file=$TARGET_VOICE" >> $GITHUB_OUTPUT
+            else
+              # Randomly select from available voices
+              RANDOM_INDEX=$((RANDOM % VOICE_COUNT))
+              SELECTED_VOICE="${VOICE_FILES[$RANDOM_INDEX]}"
+              echo "⚠️ Voice $TARGET_VOICE not found, randomly selected: $SELECTED_VOICE"
+              echo "voice_file=$SELECTED_VOICE" >> $GITHUB_OUTPUT
+            fi
+          fi
 
-      - name: Cache XTTS v2 Model (reuse from long)
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.local/share/tts
-            ~/.cache/tts
-          key: xtts-v2-model-cache-v1
-          restore-keys: |
-            xtts-v2-model-cache-
-
-      - name: Install XTTS compatible dependencies
-        run: |
-          pip uninstall -y torch torchvision torchaudio transformers TTS || true
-          pip install torch==2.4.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-          pip install transformers==4.41.2
-          pip install TTS
-
-      - name: Download Short Script Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: script-short-${{ env.RUN_ID }}
-          path: output/
-
-      - name: Generate Short Audio with XTTS v2
+      - name: Generate Audio with Multi-Voice Support
         id: audio
+        env:
+          VOICE_FILE: ${{ steps.voice_setup.outputs.voice_file }}
         run: |
+          echo "Using voice file: $VOICE_FILE"
           python src/video_generation/generate_audio.py \
             --script-file output/script_short.json \
             --run-id "$RUN_ID" \
-            --script-type short
+            --script-type short \
+            --voice-file "$VOICE_FILE"
 
-      - name: Validate Short Audio Duration
+      - name: Validate Audio Duration (24-58 seconds)
         run: |
           python src/video_generation/validate_duration.py \
             --audio-file output/audio_short.wav \
-            --max-duration 65 \
+            --min-duration 24 \
+            --max-duration 58 \
             --run-id "$RUN_ID"
 
-      - name: Upload Short Audio Artifact
+      - name: Upload Audio Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: audio-short-${{ env.RUN_ID }}
+          name: audio-${{ env.RUN_ID }}
           path: output/audio_short.wav
           retention-days: 1
 
@@ -320,18 +240,16 @@ jobs:
           TIER1_HEALTH_URL: ${{ secrets.TIER1_HEALTH_URL }}
         run: |
           python src/video_generation/notify_webhook.py \
-            --action "short_audio_generated" \
+            --action "audio_generated" \
             --run-id "$RUN_ID" \
-            --status "${{ job.status }}"
+            --status "${{ job.status }}" \
+            --channel-id "$CHANNEL_ID"
 
-  # Phase 3: Subtitle Generation (USES AUDIO DURATION AUTHORITY)
+  # Phase 3: Subtitle Generation
   generate-subtitles:
     runs-on: ubuntu-latest
-    needs: [generate-audio-long, generate-audio-short]
-    timeout-minutes: 30
-    strategy:
-      matrix:
-        audio-type: [long, short]
+    needs: generate-audio
+    timeout-minutes: 15
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -350,36 +268,29 @@ jobs:
         run: |
           pip install -r src/video_generation/requirements.txt
 
-      - name: Download ${{ matrix.audio-type }} Audio Artifact
+      - name: Download Audio Artifact
         uses: actions/download-artifact@v4
         with:
-          name: audio-${{ matrix.audio-type }}-${{ env.RUN_ID }}
+          name: audio-${{ env.RUN_ID }}
           path: output/
 
-      - name: Download ${{ matrix.audio-type }} Script Artifact
+      - name: Download Script Artifact
         uses: actions/download-artifact@v4
         with:
-          name: script-${{ matrix.audio-type }}-${{ env.RUN_ID }}
+          name: script-${{ env.RUN_ID }}
           path: output/
 
-      - name: Generate ${{ matrix.audio-type }} Subtitles (USING AUDIO DURATION AUTHORITY)
+      - name: Generate Subtitles
         env:
           RUN_ID: ${{ env.RUN_ID }}
         run: |
-          if [ "${{ matrix.audio-type }}" == "long" ]; then
-            SCRIPT_FILE="output/script_long.json"
-          else
-            SCRIPT_FILE="output/script_short.json"
-          fi
-          
-          echo "⚡ Generating ${{ matrix.audio-type }} subtitles using AUDIO DURATION AUTHORITY"
           python src/video_generation/generate_subtitles.py \
             --run-id "$RUN_ID" \
             --audio-dir output \
-            --script-file "$SCRIPT_FILE" \
+            --script-file output/script_short.json \
             --output-file output/subtitles.srt
 
-      - name: Validate ${{ matrix.audio-type }} Subtitles
+      - name: Validate Subtitles
         run: |
           if [ ! -f "output/subtitles.srt" ]; then
             echo "❌ Subtitles file not found"
@@ -388,28 +299,27 @@ jobs:
           
           LINE_COUNT=$(wc -l < output/subtitles.srt)
           SUB_COUNT=$((LINE_COUNT / 4))
-          echo "✅ ${{ matrix.audio-type }} subtitles generated: $SUB_COUNT subtitles"
+          echo "✅ Subtitles generated: $SUB_COUNT subtitles"
           
-          # Check for center alignment marker
-          if grep -q "{\\\\an5}" output/subtitles.srt; then
-            echo "✅ Center alignment marker {\\an5} found"
+          if grep -q "{\\an5}" output/subtitles.srt; then
+            echo "✅ Center alignment marker found"
           else
-            echo "❌ Center alignment marker missing - this is required"
+            echo "❌ Center alignment marker missing"
             exit 1
           fi
 
-      - name: Upload ${{ matrix.audio-type }} Subtitles Artifact
+      - name: Upload Subtitles Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: subtitles-${{ matrix.audio-type }}-${{ env.RUN_ID }}
+          name: subtitles-${{ env.RUN_ID }}
           path: output/subtitles.srt
           retention-days: 1
 
-  # Phase 4: Asset Acquisition for Long Video - PRODUCTION MODE
-  acquire-assets-long:
+  # Phase 4: Asset Acquisition
+  acquire-assets:
     runs-on: ubuntu-latest
-    needs: [generate-audio-long, generate-subtitles]
-    timeout-minutes: 360
+    needs: [generate-audio, generate-subtitles]
+    timeout-minutes: 30
     outputs:
       clip_count: ${{ steps.assets.outputs.clip_count }}
     steps:
@@ -430,82 +340,17 @@ jobs:
         run: |
           pip install -r src/video_generation/requirements.txt
 
-      - name: Download Long Script & Audio
+      - name: Download Script & Audio
         uses: actions/download-artifact@v4
         with:
-          name: script-long-${{ env.RUN_ID }}
+          name: script-${{ env.RUN_ID }}
           path: output/
       - uses: actions/download-artifact@v4
         with:
-          name: audio-long-${{ env.RUN_ID }}
+          name: audio-${{ env.RUN_ID }}
           path: output/
 
-      - name: Download Stock Footage for Long Video - PRODUCTION MODE
-        id: assets
-        env:
-          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
-          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
-        run: |
-          python src/video_generation/acquire_assets.py \
-            --script-file output/script_long.json \
-            --run-id "$RUN_ID" \
-            --video-type long
-
-      - name: Upload Long Assets Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: assets-long-${{ env.RUN_ID }}
-          path: output/clips/
-          retention-days: 1
-
-      - name: Notify Tier 1
-        if: always()
-        env:
-          TIER1_WEBHOOK_URL: ${{ secrets.TIER1_WEBHOOK_URL }}
-          TIER1_HEALTH_URL: ${{ secrets.TIER1_HEALTH_URL }}
-        run: |
-          python src/video_generation/notify_webhook.py \
-            --action "assets_downloaded" \
-            --run-id "$RUN_ID" \
-            --status "${{ job.status }}" \
-            --video-type "long"
-
-  # Phase 4.5: Asset Acquisition for Short Video - PRODUCTION MODE
-  acquire-assets-short:
-    runs-on: ubuntu-latest
-    needs: [generate-audio-short, generate-subtitles]
-    timeout-minutes: 60
-    outputs:
-      clip_count: ${{ steps.assets.outputs.clip_count }}
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Setup FFmpeg
-        uses: FedericoCarboni/setup-ffmpeg@v3
-        with:
-          ffmpeg-version: '6.1'
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install Dependencies
-        run: |
-          pip install -r src/video_generation/requirements.txt
-
-      - name: Download Short Script & Audio
-        uses: actions/download-artifact@v4
-        with:
-          name: script-short-${{ env.RUN_ID }}
-          path: output/
-      - uses: actions/download-artifact@v4
-        with:
-          name: audio-short-${{ env.RUN_ID }}
-          path: output/
-
-      - name: Download Stock Footage for Short Video - PRODUCTION MODE
+      - name: Download Stock Footage
         id: assets
         env:
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
@@ -516,10 +361,10 @@ jobs:
             --run-id "$RUN_ID" \
             --video-type short
 
-      - name: Upload Short Assets Artifact
+      - name: Upload Assets Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: assets-short-${{ env.RUN_ID }}
+          name: assets-${{ env.RUN_ID }}
           path: output/clips/
           retention-days: 1
 
@@ -533,13 +378,13 @@ jobs:
             --action "assets_downloaded" \
             --run-id "$RUN_ID" \
             --status "${{ job.status }}" \
-            --video-type "short"
+            --channel-id "$CHANNEL_ID"
 
   # Phase 5: Thumbnail Generation
   generate-thumbnail:
     runs-on: ubuntu-latest
-    needs: generate-script-long
-    timeout-minutes: 360
+    needs: generate-script
+    timeout-minutes: 30
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -553,10 +398,10 @@ jobs:
         run: |
           pip install -r src/video_generation/requirements.txt
 
-      - name: Download Long Script
+      - name: Download Script
         uses: actions/download-artifact@v4
         with:
-          name: script-long-${{ env.RUN_ID }}
+          name: script-${{ env.RUN_ID }}
           path: output/
 
       - name: Generate Thumbnail
@@ -564,8 +409,9 @@ jobs:
           STABILITY_API_KEY: ${{ secrets.STABILITY_API_KEY }}
         run: |
           python src/video_generation/generate_thumbnail.py \
-            --script-file output/script_long.json \
-            --run-id "$RUN_ID"
+            --script-file output/script_short.json \
+            --run-id "$RUN_ID" \
+            --for-shorts true
 
       - name: Upload Thumbnail Artifact
         uses: actions/upload-artifact@v4
@@ -583,147 +429,14 @@ jobs:
           python src/video_generation/notify_webhook.py \
             --action "thumbnail_generated" \
             --run-id "$RUN_ID" \
-            --status "${{ job.status }}"
-
-  # Phase 6: Video Editing (Long) with Subtitles
-  edit-video-long:
-    runs-on: ubuntu-latest
-    needs: [generate-audio-long, acquire-assets-long, generate-subtitles]
-    timeout-minutes: 360
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Setup FFmpeg
-        uses: FedericoCarboni/setup-ffmpeg@v3
-        with:
-          ffmpeg-version: '6.1'
-
-      - name: Install Hindi Fonts
-        run: |
-          sudo apt update
-          sudo apt install -y fonts-noto fonts-noto-core fonts-noto-extra fonts-noto-ui-core fonts-noto-ui-extra
-          fc-cache -fv
-          echo "✅ Noto Sans Devanagari fonts installed for Hindi subtitle support"
-          mkdir -p assets/fonts
-          FONT_SRC=$(find /usr/share/fonts -name "*NotoSansDevanagari*Regular*" 2>/dev/null | head -1)
-          if [ -n "$FONT_SRC" ]; then
-            cp "$FONT_SRC" assets/fonts/NotoSansDevanagari-Regular.ttf
-            echo "✅ Font copied to assets/fonts/"
-          else
-            echo "⚠️ NotoSansDevanagari-Regular not found, system fallback will be used"
-          fi
-
-      - name: Download Long Script Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: script-long-${{ env.RUN_ID }}
-          path: output/
-
-      - name: Download Long Audio Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: audio-long-${{ env.RUN_ID }}
-          path: output/
-
-      - name: Download Long Assets Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: assets-long-${{ env.RUN_ID }}
-          path: output/clips/
-
-      - name: Download Long Subtitles Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: subtitles-long-${{ env.RUN_ID }}
-          path: output/
-
-      - name: Pipeline Integrity Guard - Long Video
-        run: |
-          echo "🔍 Validating all required files for long video pipeline..."
-          MISSING=0
-          
-          if [ ! -f "output/script_long.json" ]; then
-            echo "❌ Missing: output/script_long.json"
-            MISSING=$((MISSING+1))
-          else
-            echo "✅ Found: output/script_long.json"
-          fi
-          
-          if [ ! -f "output/audio_long.wav" ]; then
-            echo "❌ Missing: output/audio_long.wav"
-            MISSING=$((MISSING+1))
-          else
-            echo "✅ Found: output/audio_long.wav"
-          fi
-          
-          if [ ! -f "output/subtitles.srt" ]; then
-            echo "❌ Missing: output/subtitles.srt"
-            MISSING=$((MISSING+1))
-          else
-            echo "✅ Found: output/subtitles.srt"
-          fi
-          
-          if [ ! -d "output/clips" ] || [ -z "$(ls -A output/clips)" ]; then
-            echo "❌ Missing: output/clips/ (empty or not found)"
-            MISSING=$((MISSING+1))
-          else
-            echo "✅ Found: output/clips/ with $(ls -1 output/clips | wc -l) files"
-          fi
-          
-          if [ $MISSING -gt 0 ]; then
-            echo "❌ Pipeline integrity check failed: $MISSING required files missing"
-            exit 1
-          fi
-          
-          echo "✅ All required files present - proceeding with long video editing"
-
-      - name: Organize Long Video Files
-        run: |
-          mkdir -p output/final
-          echo "📁 Long video files organized:"
-          ls -la output/
-
-      - name: Edit Long Video with Subtitles
-        run: |
-          python src/video_generation/edit_video.py \
-            --type long \
-            --script-file output/script_long.json \
-            --clips-dir output/clips/ \
-            --subtitles-file output/subtitles.srt \
-            --run-id "$RUN_ID" \
-            --audio-file output/audio_long.wav
-
-      - name: Quality Check Long Video
-        run: |
-          python src/video_generation/quality_check.py \
-            --video output/final_video_long.mp4 \
-            --type long
-
-      - name: Upload Long Video
-        uses: actions/upload-artifact@v4
-        with:
-          name: video-long-${{ env.RUN_ID }}
-          path: output/final_video_long.mp4
-          retention-days: 1
-
-      - name: Notify Tier 1
-        if: always()
-        env:
-          TIER1_WEBHOOK_URL: ${{ secrets.TIER1_WEBHOOK_URL }}
-          TIER1_HEALTH_URL: ${{ secrets.TIER1_HEALTH_URL }}
-        run: |
-          python src/video_generation/notify_webhook.py \
-            --action "video_rendered" \
-            --run-id "$RUN_ID" \
             --status "${{ job.status }}" \
-            --video-type "long"
+            --channel-id "$CHANNEL_ID"
 
-  # Phase 6.5: Video Editing (Short) with Viral Hooks and Subtitles
-  edit-video-short:
+  # Phase 6: Video Editing with Viral Elements
+  edit-video:
     runs-on: ubuntu-latest
-    needs: [generate-audio-short, acquire-assets-short, generate-subtitles]
-    timeout-minutes: 60
+    needs: [generate-audio, acquire-assets, generate-subtitles, generate-thumbnail]
+    timeout-minutes: 30
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -747,85 +460,65 @@ jobs:
           sudo apt update
           sudo apt install -y fonts-noto fonts-noto-core fonts-noto-extra fonts-noto-ui-core fonts-noto-ui-extra
           fc-cache -fv
-          echo "✅ Noto Sans Devanagari fonts installed for Hindi subtitle support"
+          echo "✅ Noto Sans Devanagari fonts installed"
           mkdir -p assets/fonts
           FONT_SRC=$(find /usr/share/fonts -name "*NotoSansDevanagari*Regular*" 2>/dev/null | head -1)
           if [ -n "$FONT_SRC" ]; then
             cp "$FONT_SRC" assets/fonts/NotoSansDevanagari-Regular.ttf
             echo "✅ Font copied to assets/fonts/"
-          else
-            echo "⚠️ NotoSansDevanagari-Regular not found, system fallback will be used"
           fi
 
-      - name: Download Short Script Artifact
+      - name: Download All Artifacts
         uses: actions/download-artifact@v4
         with:
-          name: script-short-${{ env.RUN_ID }}
           path: output/
+          pattern: '*-${{ env.RUN_ID }}'
 
-      - name: Download Short Audio Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: audio-short-${{ env.RUN_ID }}
-          path: output/
-
-      - name: Download Short Assets Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: assets-short-${{ env.RUN_ID }}
-          path: output/clips/
-
-      - name: Download Short Subtitles Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: subtitles-short-${{ env.RUN_ID }}
-          path: output/
-
-      - name: Pipeline Integrity Guard - Short Video
+      - name: Organize Files
         run: |
-          echo "🔍 Validating all required files for short video pipeline..."
+          mkdir -p output/final
+          # Move files from subdirectories
+          if [ -d "output/script-${{ env.RUN_ID }}" ]; then
+            cp output/script-${{ env.RUN_ID }}/* output/
+          fi
+          if [ -d "output/audio-${{ env.RUN_ID }}" ]; then
+            cp output/audio-${{ env.RUN_ID }}/* output/
+          fi
+          if [ -d "output/assets-${{ env.RUN_ID }}" ]; then
+            cp -r output/assets-${{ env.RUN_ID }}/* output/clips/ 2>/dev/null || true
+          fi
+          if [ -d "output/subtitles-${{ env.RUN_ID }}" ]; then
+            cp output/subtitles-${{ env.RUN_ID }}/* output/
+          fi
+          echo "📁 Files organized"
+          ls -la output/
+
+      - name: Pipeline Integrity Check
+        run: |
+          echo "🔍 Validating required files..."
           MISSING=0
           
           if [ ! -f "output/script_short.json" ]; then
             echo "❌ Missing: output/script_short.json"
             MISSING=$((MISSING+1))
-          else
-            echo "✅ Found: output/script_short.json"
           fi
           
           if [ ! -f "output/audio_short.wav" ]; then
             echo "❌ Missing: output/audio_short.wav"
             MISSING=$((MISSING+1))
-          else
-            echo "✅ Found: output/audio_short.wav"
           fi
           
           if [ ! -f "output/subtitles.srt" ]; then
             echo "❌ Missing: output/subtitles.srt"
             MISSING=$((MISSING+1))
-          else
-            echo "✅ Found: output/subtitles.srt"
-          fi
-          
-          if [ ! -d "output/clips" ] || [ -z "$(ls -A output/clips)" ]; then
-            echo "❌ Missing: output/clips/ (empty or not found)"
-            MISSING=$((MISSING+1))
-          else
-            echo "✅ Found: output/clips/ with $(ls -1 output/clips | wc -l) files"
           fi
           
           if [ $MISSING -gt 0 ]; then
-            echo "❌ Pipeline integrity check failed: $MISSING required files missing"
+            echo "❌ Pipeline integrity check failed"
             exit 1
           fi
           
-          echo "✅ All required files present - proceeding with short video editing"
-
-      - name: Organize Short Video Files
-        run: |
-          mkdir -p output/final
-          echo "📁 Short video files organized:"
-          ls -la output/
+          echo "✅ All required files present"
 
       - name: Generate Viral Hook
         env:
@@ -843,7 +536,7 @@ jobs:
             --script-file output/script_short.json \
             --run-id "$RUN_ID"
 
-      - name: Edit Short Video with Hook Overlay and Subtitles
+      - name: Edit Shorts Video
         run: |
           python src/video_generation/edit_video.py \
             --type short \
@@ -855,16 +548,16 @@ jobs:
             --cta-file output/cta.json \
             --audio-file output/audio_short.wav
 
-      - name: Quality Check Short Video
+      - name: Quality Check
         run: |
           python src/video_generation/quality_check.py \
             --video output/final_video_short.mp4 \
             --type short
 
-      - name: Upload Short Video
+      - name: Upload Final Video
         uses: actions/upload-artifact@v4
         with:
-          name: video-short-${{ env.RUN_ID }}
+          name: video-${{ env.RUN_ID }}
           path: output/final_video_short.mp4
           retention-days: 1
 
@@ -878,16 +571,15 @@ jobs:
             --action "video_rendered" \
             --run-id "$RUN_ID" \
             --status "${{ job.status }}" \
-            --video-type "short"
+            --channel-id "$CHANNEL_ID"
 
-  # Phase 7: Direct YouTube Upload
+  # Phase 7: Direct YouTube Upload (Shorts Only)
   upload-to-youtube:
     runs-on: ubuntu-latest
-    needs: [edit-video-long, edit-video-short, generate-thumbnail]
-    timeout-minutes: 360
+    needs: edit-video
+    timeout-minutes: 60
     outputs:
-      long_video_id: ${{ steps.upload.outputs.long_video_id }}
-      short_video_id: ${{ steps.upload.outputs.short_video_id }}
+      video_id: ${{ steps.upload.outputs.video_id }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -912,45 +604,33 @@ jobs:
         run: |
           mkdir -p output/upload
           
-          # Copy long video
-          if [ -d "output/video-long-${{ env.RUN_ID }}" ]; then
-            cp output/video-long-${{ env.RUN_ID }}/final_video_long.mp4 output/upload/long_video.mp4 2>/dev/null || echo "⚠️ Long video not found"
-          fi
-          
-          # Copy short video
-          if [ -d "output/video-short-${{ env.RUN_ID }}" ]; then
-            cp output/video-short-${{ env.RUN_ID }}/final_video_short.mp4 output/upload/short_video.mp4 2>/dev/null || echo "⚠️ Short video not found"
+          # Copy video
+          if [ -d "output/video-${{ env.RUN_ID }}" ]; then
+            cp output/video-${{ env.RUN_ID }}/final_video_short.mp4 output/upload/short_video.mp4
           fi
           
           # Copy thumbnail
           if [ -d "output/thumbnail-${{ env.RUN_ID }}" ]; then
-            cp output/thumbnail-${{ env.RUN_ID }}/thumbnail*.jpg output/upload/thumbnail.jpg 2>/dev/null || echo "⚠️ Thumbnail not found"
+            cp output/thumbnail-${{ env.RUN_ID }}/thumbnail*.jpg output/upload/thumbnail.jpg
           fi
           
-          # Copy long script (contains titles, descriptions)
-          if [ -d "output/script-long-${{ env.RUN_ID }}" ]; then
-            cp output/script-long-${{ env.RUN_ID }}/script_long.json output/upload/script.json 2>/dev/null || echo "⚠️ Script not found"
+          # Copy script
+          if [ -d "output/script-${{ env.RUN_ID }}" ]; then
+            cp output/script-${{ env.RUN_ID }}/script_short.json output/upload/script.json
           fi
           
-          echo "📁 Files ready for YouTube upload:"
+          echo "📁 Files ready for upload:"
           ls -la output/upload/
 
       - name: Verify Upload Files
         run: |
-          REQUIRED_FILES=("long_video.mp4" "short_video.mp4" "script.json")
-          MISSING_FILES=0
+          if [ ! -f "output/upload/short_video.mp4" ]; then
+            echo "❌ Short video not found"
+            exit 1
+          fi
           
-          for file in "${REQUIRED_FILES[@]}"; do
-            if [ ! -f "output/upload/$file" ]; then
-              echo "❌ Missing required file: $file"
-              MISSING_FILES=$((MISSING_FILES + 1))
-            else
-              echo "✅ Found: $file ($(du -h output/upload/$file | cut -f1))"
-            fi
-          done
-          
-          if [ $MISSING_FILES -gt 0 ]; then
-            echo "❌ Cannot proceed: $MISSING_FILES required files missing"
+          if [ ! -f "output/upload/script.json" ]; then
+            echo "❌ Script not found"
             exit 1
           fi
           
@@ -963,25 +643,22 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           RUN_ID: ${{ env.RUN_ID }}
-          CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+          CHANNEL_ID: ${{ env.CHANNEL_ID }}
         run: |
           python src/youtube/upload_to_youtube.py \
             --channel-id "${{ env.CHANNEL_ID }}" \
-            --files-dir output/upload/
+            --files-dir output/upload/ \
+            --video-type shorts
           
-          # Extract video IDs from manifest
+          # Extract video ID from manifest
           if [ -f "output/upload/youtube_manifest.json" ]; then
-            LONG_VIDEO_ID=$(jq -r '.long_video_id' output/upload/youtube_manifest.json)
-            SHORT_VIDEO_ID=$(jq -r '.short_video_id' output/upload/youtube_manifest.json)
-            
-            echo "long_video_id=$LONG_VIDEO_ID" >> $GITHUB_OUTPUT
-            echo "short_video_id=$SHORT_VIDEO_ID" >> $GITHUB_OUTPUT
-            
-            echo "✅ Long Video ID: $LONG_VIDEO_ID"
-            echo "✅ Short Video ID: $SHORT_VIDEO_ID"
+            VIDEO_ID=$(jq -r '.video_id' output/upload/youtube_manifest.json)
+            echo "video_id=$VIDEO_ID" >> $GITHUB_OUTPUT
+            echo "✅ Video ID: $VIDEO_ID"
           fi
 
-      - name: Notify Tier 1 - YouTube Upload Complete
+      - name: Notify Tier 1 - Upload Complete
+        if: always()
         env:
           TIER1_WEBHOOK_URL: ${{ secrets.TIER1_WEBHOOK_URL }}
           TIER1_HEALTH_URL: ${{ secrets.TIER1_HEALTH_URL }}
@@ -989,63 +666,50 @@ jobs:
           python src/video_generation/notify_webhook.py \
             --action "youtube_upload_complete" \
             --run-id "$RUN_ID" \
-            --status "success" \
-            --long-video-id "${{ steps.upload.outputs.long_video_id }}" \
-            --short-video-id "${{ steps.upload.outputs.short_video_id }}"
+            --status "${{ job.status }}" \
+            --video-id "${{ steps.upload.outputs.video_id }}" \
+            --channel-id "$CHANNEL_ID"
 
-  # Phase 8: Final Success Webhook
+  # Phase 8: Final Success Notification
   notify-success:
     runs-on: ubuntu-latest
-    needs: [upload-to-youtube]
-    if: success()
+    needs: upload-to-youtube
+    if: always()
     steps:
-      - name: Notify Complete Success
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Dependencies
+        run: |
+          pip install -r src/video_generation/requirements.txt
+
+      - name: Final Success Notification
+        if: needs.upload-to-youtube.result == 'success'
         env:
           TIER1_WEBHOOK_URL: ${{ secrets.TIER1_WEBHOOK_URL }}
           TIER1_HEALTH_URL: ${{ secrets.TIER1_HEALTH_URL }}
         run: |
           python src/video_generation/notify_webhook.py \
-            --action "pipeline_complete" \
+            --action "production_complete" \
             --run-id "$RUN_ID" \
             --status "success" \
-            --long-video-id "${{ needs.upload-to-youtube.outputs.long_video_id }}" \
-            --short-video-id "${{ needs.upload-to-youtube.outputs.short_video_id }}"
-          
-          echo "✅ Pipeline completed successfully!"
-          echo "📹 Long Video: https://youtube.com/watch?v=${{ needs.upload-to-youtube.outputs.long_video_id }}"
-          echo "📱 Short Video: https://youtube.com/watch?v=${{ needs.upload-to-youtube.outputs.short_video_id }}"
+            --channel-id "$CHANNEL_ID" \
+            --message "Viral Shorts production completed successfully!"
 
-  # Phase 9: Cleanup
-  cleanup:
-    runs-on: ubuntu-latest
-    needs: [upload-to-youtube, notify-success]
-    if: always()
-    steps:
-      - name: Cleanup Artifacts
-        uses: geekyeggo/delete-artifact@v4
-        with:
-          name: |
-            script-long-${{ env.RUN_ID }}
-            script-short-${{ env.RUN_ID }}
-            audio-long-${{ env.RUN_ID }}
-            audio-short-${{ env.RUN_ID }}
-            assets-long-${{ env.RUN_ID }}
-            assets-short-${{ env.RUN_ID }}
-            thumbnail-${{ env.RUN_ID }}
-            subtitles-long-${{ env.RUN_ID }}
-            subtitles-short-${{ env.RUN_ID }}
-            video-long-${{ env.RUN_ID }}
-            video-short-${{ env.RUN_ID }}
-          failOnError: false
-
-      - name: Final Status
+      - name: Failure Notification
+        if: needs.upload-to-youtube.result == 'failure'
+        env:
+          TIER1_WEBHOOK_URL: ${{ secrets.TIER1_WEBHOOK_URL }}
+          TIER1_HEALTH_URL: ${{ secrets.TIER1_HEALTH_URL }}
         run: |
-          echo "==================================="
-          echo "📊 WORKFLOW SUMMARY"
-          echo "==================================="
-          echo "Run ID: $RUN_ID"
-          echo "Category: $MAIN_CATEGORY / $SUB_CATEGORY"
-          echo "Episode: $EPISODE"
-          echo "Channel: $CHANNEL_ID"
-          echo "Status: ${{ job.status }}"
-          echo "==================================="
+          python src/video_generation/notify_webhook.py \
+            --action "production_failed" \
+            --run-id "$RUN_ID" \
+            --status "failure" \
+            --channel-id "$CHANNEL_ID" \
+            --message "Viral Shorts production failed. Check logs for details."
