@@ -1,1 +1,526 @@
-{"test": "content"}
+{
+  "categories": [
+    {
+      "id": "human-psychology",
+      "name": "Human Psychology & Behavior",
+      "hindi_name": "मानव मनोविज्ञान और व्यवहार",
+      "voice_tone": "deep_mysterious",
+      "voice_tone_hindi": "गहरा और रहस्यमय",
+      "sub_categories": [
+        {
+          "id": "dark-psychology",
+          "name": "Dark Psychology",
+          "hindi_name": "डार्क साइकोलॉजी",
+          "voice_tone": "deep_mysterious",
+          "voice_tone_hindi": "गहरा और रहस्यमय"
+        },
+        {
+          "id": "life-hacks",
+          "name": "Life Hacks Psychology",
+          "hindi_name": "लाइफ हैक्स मनोविज्ञान",
+          "voice_tone": "confident_clear",
+          "voice_tone_hindi": "आत्मविश्वासी और स्पष्ट"
+        },
+        {
+          "id": "behavioral",
+          "name": "Behavioral Psychology",
+          "hindi_name": "व्यवहार मनोविज्ञान",
+          "voice_tone": "teaching",
+          "voice_tone_hindi": "शिक्षाप्रद"
+        },
+        {
+          "id": "body-language",
+          "name": "Body Language Secrets",
+          "hindi_name": "बॉडी लैंग्वेज सीक्रेट्स",
+          "voice_tone": "confident_clear",
+          "voice_tone_hindi": "आत्मविश्वासी और स्पष्ट"
+        }
+      ]
+    },
+    {
+      "id": "hidden-history",
+      "name": "Hidden Historical Truths",
+      "hindi_name": "इतिहास की छुपी सच्चाई",
+      "voice_tone": "storytelling",
+      "voice_tone_hindi": "कहानी सुनाने वाला",
+      "sub_categories": [
+        {
+          "id": "untold-school",
+          "name": "Untold School History",
+          "hindi_name": "वो सच जो स्कूलों में नहीं पढ़ाए",
+          "voice_tone": "storytelling",
+          "voice_tone_hindi": "कहानी सुनाने वाला"
+        },
+        {
+          "id": "conspiracies",
+          "name": "Historical Conspiracies",
+          "hindi_name": "ऐतिहासिक षड्यंत्र",
+          "voice_tone": "deep_mysterious",
+          "voice_tone_hindi": "गहरा और रहस्यमय"
+        },
+        {
+          "id": "real-kings",
+          "name": "Real Stories of Kings",
+          "hindi_name": "राजाओं की असली कहानियां",
+          "voice_tone": "storytelling",
+          "voice_tone_hindi": "कहानी सुनाने वाला"
+        },
+        {
+          "id": "freedom-struggle",
+          "name": "Unknown Freedom Struggle",
+          "hindi_name": "स्वतंत्रता संग्राम के अनसुने पहलू",
+          "voice_tone": "inspiring",
+          "voice_tone_hindi": "प्रेरणादायक"
+        }
+      ]
+    },
+    {
+      "id": "politics",
+      "name": "Politics Decoded",
+      "hindi_name": "राजनीति का खेल",
+      "voice_tone": "confident_clear",
+      "voice_tone_hindi": "आत्मविश्वासी और स्पष्ट",
+      "sub_categories": [
+        {
+          "id": "vote-psychology",
+          "name": "Vote Bank Psychology",
+          "hindi_name": "वोट बैंक की साइकोलॉजी",
+          "voice_tone": "analytical",
+          "voice_tone_hindi": "विश्लेषणात्मक"
+        },
+        {
+          "id": "scheme-intent",
+          "name": "Real Intent Behind Schemes",
+          "hindi_name": "स्कीमों का असली मकसद",
+          "voice_tone": "deep_mysterious",
+          "voice_tone_hindi": "गहरा और रहस्यमय"
+        },
+        {
+          "id": "leader-manipulation",
+          "name": "Leader Manipulation",
+          "hindi_name": "नेताओं की मैनिपुलेशन ट्रिक्स",
+          "voice_tone": "exposing",
+          "voice_tone_hindi": "पर्दाफाश करने वाला"
+        },
+        {
+          "id": "election-strategies",
+          "name": "Election Strategies",
+          "hindi_name": "चुनावी रणनीतियां",
+          "voice_tone": "analytical",
+          "voice_tone_hindi": "विश्लेषणात्मक"
+        }
+      ]
+    },
+    {
+      "id": "business",
+      "name": "Business Fundamentals",
+      "hindi_name": "बिजनेस की बुनियाद",
+      "voice_tone": "confident_clear",
+      "voice_tone_hindi": "आत्मविश्वासी और स्पष्ट",
+      "sub_categories": [
+        {
+          "id": "mindset",
+          "name": "Businessman Mindset",
+          "hindi_name": "बिजनेसमैन माइंडसेट",
+          "voice_tone": "motivational",
+          "voice_tone_hindi": "प्रेरणादायक"
+        },
+        {
+          "id": "systems",
+          "name": "Building Systems",
+          "hindi_name": "सिस्टम बनाना सीखो",
+          "voice_tone": "teaching",
+          "voice_tone_hindi": "शिक्षाप्रद"
+        },
+        {
+          "id": "money-works",
+          "name": "Money Works For You",
+          "hindi_name": "पैसे काम करें आप नहीं",
+          "voice_tone": "confident_clear",
+          "voice_tone_hindi": "आत्मविश्वासी और स्पष्ट"
+        },
+        {
+          "id": "startup",
+          "name": "Startup Psychology",
+          "hindi_name": "स्टार्टअप साइकोलॉजी",
+          "voice_tone": "inspiring",
+          "voice_tone_hindi": "प्रेरणादायक"
+        }
+      ]
+    },
+    {
+      "id": "education",
+      "name": "Education System Exposed",
+      "hindi_name": "स्टडी सिस्टम रिव्यू",
+      "voice_tone": "exposing",
+      "voice_tone_hindi": "पर्दाफाश करने वाला",
+      "sub_categories": [
+        {
+          "id": "old-education",
+          "name": "Why Old Education Fails",
+          "hindi_name": "पुरानी पढ़ाई क्यों फेल है",
+          "voice_tone": "exposing",
+          "voice_tone_hindi": "पर्दाफाश करने वाला"
+        },
+        {
+          "id": "school-vs-life",
+          "name": "School vs Real Life",
+          "hindi_name": "स्कूल vs रियल लाइफ",
+          "voice_tone": "analytical",
+          "voice_tone_hindi": "विश्लेषणात्मक"
+        },
+        {
+          "id": "real-education",
+          "name": "Real Education for Success",
+          "hindi_name": "सक्सेस की असली पढ़ाई",
+          "voice_tone": "teaching",
+          "voice_tone_hindi": "शिक्षाप्रद"
+        },
+        {
+          "id": "routine",
+          "name": "Daily Routine Mastery",
+          "hindi_name": "डेली रूटीन मास्टरी",
+          "voice_tone": "motivational",
+          "voice_tone_hindi": "प्रेरणादायक"
+        }
+      ]
+    },
+    {
+      "id": "society",
+      "name": "Society Reality",
+      "hindi_name": "समाज का सच",
+      "voice_tone": "deep_mysterious",
+      "voice_tone_hindi": "गहरा और रहस्यमय",
+      "sub_categories": [
+        {
+          "id": "poverty-cycle",
+          "name": "Cycle of Poverty",
+          "hindi_name": "गरीबी का चक्र",
+          "voice_tone": "deep_mysterious",
+          "voice_tone_hindi": "गहरा और रहस्यमय"
+        },
+        {
+          "id": "rich-secrets",
+          "name": "Secrets of Rich Society",
+          "hindi_name": "अमीर समाज के रहस्य",
+          "voice_tone": "exposing",
+          "voice_tone_hindi": "पर्दाफाश करने वाला"
+        },
+        {
+          "id": "social-class",
+          "name": "Social Class Psychology",
+          "hindi_name": "सोशल क्लास साइकोलॉजी",
+          "voice_tone": "analytical",
+          "voice_tone_hindi": "विश्लेषणात्मक"
+        },
+        {
+          "id": "breaking-system",
+          "name": "Breaking the System",
+          "hindi_name": "ब्रेकिंग द सिस्टम",
+          "voice_tone": "motivational",
+          "voice_tone_hindi": "प्रेरणादायक"
+        }
+      ]
+    },
+    {
+      "id": "communication",
+      "name": "Communication Mastery",
+      "hindi_name": "कम्युनिकेशन मास्टरी",
+      "voice_tone": "confident_clear",
+      "voice_tone_hindi": "आत्मविश्वासी और स्पष्ट",
+      "sub_categories": [
+        {
+          "id": "presentation",
+          "name": "Presentation Psychology",
+          "hindi_name": "प्रेजेंटेशन साइकोलॉजी",
+          "voice_tone": "confident_clear",
+          "voice_tone_hindi": "आत्मविश्वासी और स्पष्ट"
+        },
+        {
+          "id": "less-education",
+          "name": "Less Education More Impact",
+          "hindi_name": "कम पढ़े लिखे का जादू",
+          "voice_tone": "inspiring",
+          "voice_tone_hindi": "प्रेरणादायक"
+        },
+        {
+          "id": "speaking",
+          "name": "Art of Speaking",
+          "hindi_name": "बोलने की कला",
+          "voice_tone": "teaching",
+          "voice_tone_hindi": "शिक्षाप्रद"
+        },
+        {
+          "id": "writing",
+          "name": "Impactful Writing",
+          "hindi_name": "प्रभावशाली लेखन",
+          "voice_tone": "teaching",
+          "voice_tone_hindi": "शिक्षाप्रद"
+        }
+      ]
+    },
+    {
+      "id": "human-life",
+      "name": "Human Life Reality",
+      "hindi_name": "इंसानी जिंदगी की हकीकत",
+      "voice_tone": "deep_mysterious",
+      "voice_tone_hindi": "गहरा और रहस्यमय",
+      "sub_categories": [
+        {
+          "id": "success-lies",
+          "name": "Lies About Success",
+          "hindi_name": "सक्सेस का झूठ",
+          "voice_tone": "exposing",
+          "voice_tone_hindi": "पर्दाफाश करने वाला"
+        },
+        {
+          "id": "relations-market",
+          "name": "Relations Marketplace",
+          "hindi_name": "रिश्तों का बाजार",
+          "voice_tone": "deep_mysterious",
+          "voice_tone_hindi": "गहरा और रहस्यमय"
+        },
+        {
+          "id": "emotional-manipulation",
+          "name": "Emotional Manipulation",
+          "hindi_name": "भावनाओं की दुकानदारी",
+          "voice_tone": "exposing",
+          "voice_tone_hindi": "पर्दाफाश करने वाला"
+        },
+        {
+          "id": "real-living",
+          "name": "Real Way of Living",
+          "hindi_name": "जीने का असली तरीका",
+          "voice_tone": "inspiring",
+          "voice_tone_hindi": "प्रेरणादायक"
+        }
+      ]
+    },
+    {
+      "id": "mythology",
+      "name": "Mythology & Ancient Wisdom",
+      "hindi_name": "पौराणिक कथाएं और प्राचीन ज्ञान",
+      "voice_tone": "storytelling",
+      "voice_tone_hindi": "कहानी सुनाने वाला",
+      "sub_categories": [
+        {
+          "id": "mahabharat-secrets",
+          "name": "Mahabharat Hidden Secrets",
+          "hindi_name": "महाभारत के छुपे रहस्य",
+          "voice_tone": "storytelling",
+          "voice_tone_hindi": "कहानी सुनाने वाला"
+        },
+        {
+          "id": "ramayan-lessons",
+          "name": "Ramayan Life Lessons",
+          "hindi_name": "रामायण के जीवन सबक",
+          "voice_tone": "teaching",
+          "voice_tone_hindi": "शिक्षाप्रद"
+        },
+        {
+          "id": "vedic-science",
+          "name": "Vedic Science Facts",
+          "hindi_name": "वैज्ञानिक तथ्य",
+          "voice_tone": "analytical",
+          "voice_tone_hindi": "विश्लेषणात्मक"
+        },
+        {
+          "id": "temple-mysteries",
+          "name": "Temple Mysteries",
+          "hindi_name": "मंदिरों के रहस्य",
+          "voice_tone": "deep_mysterious",
+          "voice_tone_hindi": "गहरा और रहस्यमय"
+        }
+      ]
+    },
+    {
+      "id": "health-wellness",
+      "name": "Health & Wellness",
+      "hindi_name": "स्वास्थ्य और कल्याण",
+      "voice_tone": "calm_soothing",
+      "voice_tone_hindi": "शांत और सुकून भरा",
+      "sub_categories": [
+        {
+          "id": "ayurveda",
+          "name": "Ayurvedic Wisdom",
+          "hindi_name": "आयुर्वेदिक ज्ञान",
+          "voice_tone": "calm_soothing",
+          "voice_tone_hindi": "शांत और सुकून भरा"
+        },
+        {
+          "id": "mental-health",
+          "name": "Mental Health Awareness",
+          "hindi_name": "मानसिक स्वास्थ्य जागरूकता",
+          "voice_tone": "empathetic",
+          "voice_tone_hindi": "सहानुभूतिपूर्ण"
+        },
+        {
+          "id": "fitness-mindset",
+          "name": "Fitness Mindset",
+          "hindi_name": "फिटनेस माइंडसेट",
+          "voice_tone": "motivational",
+          "voice_tone_hindi": "प्रेरणादायक"
+        },
+        {
+          "id": "sleep-science",
+          "name": "Sleep Science",
+          "hindi_name": "नींद का विज्ञान",
+          "voice_tone": "teaching",
+          "voice_tone_hindi": "शिक्षाप्रद"
+        }
+      ]
+    },
+    {
+      "id": "finance",
+      "name": "Personal Finance",
+      "hindi_name": "व्यक्तिगत वित्त",
+      "voice_tone": "confident_clear",
+      "voice_tone_hindi": "आत्मविश्वासी और स्पष्ट",
+      "sub_categories": [
+        {
+          "id": "saving-psychology",
+          "name": "Saving Psychology",
+          "hindi_name": "बचत की साइकोलॉजी",
+          "voice_tone": "teaching",
+          "voice_tone_hindi": "शिक्षाप्रद"
+        },
+        {
+          "id": "investment-basics",
+          "name": "Investment Basics",
+          "hindi_name": "निवेश की बुनियाद",
+          "voice_tone": "confident_clear",
+          "voice_tone_hindi": "आत्मविश्वासी और स्पष्ट"
+        },
+        {
+          "id": "debt-trap",
+          "name": "Debt Trap Reality",
+          "hindi_name": "कर्ज जाल की हकीकत",
+          "voice_tone": "warning",
+          "voice_tone_hindi": "चेतावनी भरा"
+        },
+        {
+          "id": "financial-freedom",
+          "name": "Path to Financial Freedom",
+          "hindi_name": "वित्तीय स्वतंत्रता का रास्ता",
+          "voice_tone": "motivational",
+          "voice_tone_hindi": "प्रेरणादायक"
+        }
+      ]
+    },
+    {
+      "id": "technology",
+      "name": "Technology & Future",
+      "hindi_name": "टेक्नोलॉजी और भविष्य",
+      "voice_tone": "futuristic_excited",
+      "voice_tone_hindi": "भविष्यवादी और उत्साहित",
+      "sub_categories": [
+        {
+          "id": "ai-impact",
+          "name": "AI Impact on Life",
+          "hindi_name": "AI का जीवन पर प्रभाव",
+          "voice_tone": "futuristic_excited",
+          "voice_tone_hindi": "भविष्यवादी और उत्साहित"
+        },
+        {
+          "id": "digital-privacy",
+          "name": "Digital Privacy",
+          "hindi_name": "डिजिटल गोपनीयता",
+          "voice_tone": "warning",
+          "voice_tone_hindi": "चेतावनी भरा"
+        },
+        {
+          "id": "social-media-psychology",
+          "name": "Social Media Psychology",
+          "hindi_name": "सोशल मीडिया साइकोलॉजी",
+          "voice_tone": "exposing",
+          "voice_tone_hindi": "पर्दाफाश करने वाला"
+        },
+        {
+          "id": "future-jobs",
+          "name": "Future of Jobs",
+          "hindi_name": "नौकरियों का भविष्य",
+          "voice_tone": "analytical",
+          "voice_tone_hindi": "विश्लेषणात्मक"
+        }
+      ]
+    }
+  ],
+  "voice_tones": {
+    "deep_mysterious": {
+      "description": "गहरा, रहस्यमय और गंभीर आवाज़ जो रहस्य और रहस्यमयी विषयों के लिए उपयुक्त है",
+      "emotion_indicators": ["(रहस्यमय स्वर में)", "(गहरी आवाज़ में)", "(गंभीर स्वर में)", "(धीरे से)", "(रहस्य बताते हुए)"],
+      "characteristics": ["धीमी गति", "गहरा स्वर", "रहस्यमयी", "गंभीर"]
+    },
+    "confident_clear": {
+      "description": "आत्मविश्वासी, स्पष्ट और प्रभावशाली आवाज़ जो ज्ञान और विशेषज्ञता दिखाती है",
+      "emotion_indicators": ["(आत्मविश्वास से)", "(स्पष्ट स्वर में)", "(दृढ़ता से)", "(प्रभावशाली आवाज़ में)"],
+      "characteristics": ["स्पष्ट उच्चारण", "आत्मविश्वासी", "प्रभावशाली", "दृढ़"]
+    },
+    "storytelling": {
+      "description": "कहानी सुनाने वाली आवाज़ जो श्रोताओं को कहानी में खींच ले",
+      "emotion_indicators": ["(कहानी सुनाते हुए)", "(रोचक स्वर में)", "(कौतूहल से)", "(मनोरंजक अंदाज़ में)"],
+      "characteristics": ["रोचक", "कौतूहल भरा", "भावनात्मक", "जीवंत"]
+    },
+    "teaching": {
+      "description": "शिक्षाप्रद आवाज़ जो ज्ञान स्पष्ट रूप से समझाती है",
+      "emotion_indicators": ["(शिक्षाप्रद स्वर में)", "(समझाते हुए)", "(ज्ञान बांटते हुए)", "(स्पष्ट करते हुए)"],
+      "characteristics": ["स्पष्ट", "धैर्यपूर्ण", "शिक्षाप्रद", "सरल"]
+    },
+    "motivational": {
+      "description": "प्रेरणादायक आवाज़ जो श्रोताओं को प्रेरित और उत्साहित करे",
+      "emotion_indicators": ["(प्रेरणादायक स्वर में)", "(उत्साह से)", "(प्रोत्साहित करते हुए)", "(शक्तिशाली आवाज़ में)"],
+      "characteristics": ["उत्साहित", "शक्तिशाली", "प्रेरणादायक", "ऊर्जावान"]
+    },
+    "inspiring": {
+      "description": "प्रेरणादायक आवाज़ जो आशा और सकारात्मकता फैलाए",
+      "emotion_indicators": ["(प्रेरणादायक स्वर में)", "(आशा से)", "(सकारात्मकता से)", "(उत्साहित स्वर में)"],
+      "characteristics": ["आशावादी", "सकारात्मक", "उत्साहित", "प्रेरणादायक"]
+    },
+    "exposing": {
+      "description": "पर्दाफाश करने वाली आवाज़ जो सच्चाई सामने लाती है",
+      "emotion_indicators": ["(पर्दाफाश करते हुए)", "(सच्चाई बताते हुए)", "(गंभीर स्वर में)", "(आश्चर्य से)"],
+      "characteristics": ["गंभीर", "आश्चर्यजनक", "सच्चाई भरा", "प्रभावशाली"]
+    },
+    "analytical": {
+      "description": "विश्लेषणात्मक आवाज़ जो तथ्यों और तर्क प्रस्तुत करती है",
+      "emotion_indicators": ["(विश्लेषणात्मक स्वर में)", "(तथ्यों के साथ)", "(तर्क प्रस्तुत करते हुए)", "(स्पष्ट करते हुए)"],
+      "characteristics": ["तर्कसंगत", "विश्लेषणात्मक", "तथ्य-आधारित", "स्पष्ट"]
+    },
+    "calm_soothing": {
+      "description": "शांत और सुकून भरी आवाज़ जो मन को शांति दे",
+      "emotion_indicators": ["(शांत स्वर में)", "(सुकून भरी आवाज़ में)", "(धीरे से)", "(शांति से)"],
+      "characteristics": ["शांत", "सुकून भरा", "धीमा", "मधुर"]
+    },
+    "empathetic": {
+      "description": "सहानुभूतिपूर्ण आवाज़ जो भावनाओं को समझे",
+      "emotion_indicators": ["(सहानुभूति से)", "(समझते हुए)", "(देखभाल भरी आवाज़ में)", "(मधुर स्वर में)"],
+      "characteristics": ["सहानुभूतिपूर्ण", "मधुर", "देखभाल भरा", "समझदार"]
+    },
+    "warning": {
+      "description": "चेतावनी भरी आवाज़ जो सावधान करे",
+      "emotion_indicators": ["(चेतावनी भरे स्वर में)", "(सावधान करते हुए)", "(गंभीरता से)", "(ध्यान दिलाते हुए)"],
+      "characteristics": ["गंभीर", "चेतावनी भरा", "सावधान", "ध्यान आकर्षक"]
+    },
+    "futuristic_excited": {
+      "description": "भविष्यवादी और उत्साहित आवाज़ जो नई संभावनाओं के बारे में बताए",
+      "emotion_indicators": ["(उत्साहित स्वर में)", "(भविष्य की बात करते हुए)", "(नई संभावनाओं के साथ)", "(आश्चर्य से)"],
+      "characteristics": ["उत्साहित", "भविष्यवादी", "आश्चर्यजनक", "ऊर्जावान"]
+    }
+  },
+  "settings": {
+    "default_category": "Human Psychology & Behavior",
+    "default_sub_category": "Dark Psychology",
+    "target_duration_seconds": {
+      "min": 24,
+      "max": 58,
+      "optimal": 45
+    },
+    "target_word_count": {
+      "min": 70,
+      "max": 160,
+      "optimal": 120
+    },
+    "upload_timezone": "Asia/Kolkata",
+    "shorts_publish_time": "17:30"
+  }
+}
