@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-YouTube Direct Uploader - Uploads videos directly to YouTube using Firestore OAuth tokens
-Supports scheduled publishing and internal video linking
+YouTube Direct Uploader - Multi-Channel Support for Shorts
+Uploads viral shorts videos directly to YouTube using Firestore OAuth tokens
+Supports scheduled publishing
 """
 import os
 import json
@@ -11,6 +12,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Optional, Tuple
+import random
 
 import pytz
 import firebase_admin
@@ -37,13 +39,13 @@ MAX_RETRIES = 3
 RETRY_DELAY = 5  # seconds
 
 class YouTubeUploader:
-    def __init__(self, channel_id: str, files_dir: Path):
+    def __init__(self, channel_id: str, files_dir: Path, video_type: str = 'shorts'):
         """Initialize YouTube uploader with Firebase and YouTube client"""
         self.channel_id = channel_id
         self.files_dir = Path(files_dir)
+        self.video_type = video_type
         self.youtube = None
-        self.long_video_id = None
-        self.short_video_id = None
+        self.video_id = None
         
         # Initialize Firebase
         self._init_firebase()
@@ -161,7 +163,6 @@ class YouTubeUploader:
                 token_data = self._get_token_from_firestore()
                 
                 # Create credentials object with explicit full YouTube scopes
-                # Using both youtube.upload and youtube scopes to ensure all operations succeed
                 credentials = Credentials(
                     token=token_data['token'],
                     refresh_token=token_data['refresh_token'],
@@ -242,39 +243,42 @@ class YouTubeUploader:
         if not title:
             title = metadata.get('title')
         if not title:
-            title = f'{video_type.title()} Video'
-            logger.warning(f"⚠️ No title found in script.json, using fallback: {title}")
+            title = f'Viral Shorts - {datetime.now().strftime("%Y-%m-%d")}'
+            logger.warning(f"⚠️ No title found, using fallback: {title}")
         
         # Get description with fallback chain
         description = metadata.get('description', '')
         if not description:
             description = metadata.get('description_hook', '')
         if not description:
-            description = f'{title}'
-            logger.warning(f"⚠️ No description found in script.json, using title as fallback")
+            description = f'{title}\n\n#Shorts #Viral #YouTubeShorts'
+            logger.warning(f"⚠️ No description found, using title as fallback")
+        
+        # Add shorts hashtags
+        if '#Shorts' not in description:
+            description += '\n\n#Shorts #Viral #YouTubeShorts #Trending'
         
         # Check for thumbnail
         thumbnail_path = self.files_dir / 'thumbnail.jpg'
         if not thumbnail_path.exists():
             thumbnail_path = next(self.files_dir.glob('thumbnail*.jpg'), None)
         
-        # Add long video link for short video
-        if video_type == 'short' and self.long_video_id:
-            description += f"\n\nWatch Full Video: https://youtube.com/watch?v={self.long_video_id}"
-            logger.info(f"🔗 Added long video link to short description")
-        
         # Return complete metadata structure for YouTube API
         return {
             'snippet': {
-                'title': title,
-                'description': description,
+                'title': title[:100],  # YouTube title limit
+                'description': description[:5000],  # YouTube description limit
                 'categoryId': '27',  # Education
-                'defaultLanguage': 'hi'  # Hindi
+                'defaultLanguage': 'hi',  # Hindi
+                'tags': ['Shorts', 'Viral', 'Hindi', 'YouTubeShorts', 'Trending', metadata.get('category', 'Education')]
             },
             'status': {
                 'privacyStatus': 'private',
                 'publishAt': scheduled_time,
                 'selfDeclaredMadeForKids': False
+            },
+            'contentDetails': {
+                'contentRating': {}
             }
         }
     
@@ -326,7 +330,7 @@ class YouTubeUploader:
         raise Exception(f"Failed to upload after {MAX_RETRIES} attempts")
     
     def _update_video_metadata(self, video_id: str, metadata: Dict):
-        """Update video metadata for internal linking"""
+        """Update video metadata"""
         try:
             self.youtube.videos().update(
                 part='snippet',
@@ -340,71 +344,85 @@ class YouTubeUploader:
             logger.error(f"❌ Failed to update video metadata: {e}")
             raise
     
-    def upload_videos(self) -> Tuple[str, str]:
-        """Main upload process for both videos"""
+    def _upload_thumbnail(self, video_id: str, thumbnail_path: Path):
+        """Upload custom thumbnail for video"""
+        try:
+            if not thumbnail_path or not thumbnail_path.exists():
+                logger.warning("⚠️ No thumbnail file found")
+                return
+            
+            logger.info(f"🖼️ Uploading thumbnail: {thumbnail_path}")
+            
+            media = MediaFileUpload(str(thumbnail_path), mimetype='image/jpeg')
+            self.youtube.thumbnails().set(
+                videoId=video_id,
+                media_body=media
+            ).execute()
+            
+            logger.info(f"✅ Thumbnail uploaded for video: {video_id}")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to upload thumbnail: {e}")
+            # Don't fail the whole upload if thumbnail fails
+    
+    def upload_video(self) -> str:
+        """Main upload process for shorts video"""
         
         # Check required files
-        long_video = self.files_dir / 'long_video.mp4'
-        short_video = self.files_dir / 'short_video.mp4'
+        video_file = self.files_dir / 'short_video.mp4'
         
-        if not long_video.exists():
-            raise FileNotFoundError(f"Long video not found: {long_video}")
-        if not short_video.exists():
-            raise FileNotFoundError(f"Short video not found: {short_video}")
+        if not video_file.exists():
+            raise FileNotFoundError(f"Video not found: {video_file}")
         
-        # Get scheduled times
-        long_scheduled_time = self._get_scheduled_publish_time('17:00')  # 5:00 PM IST
-        short_scheduled_time = self._get_scheduled_publish_time('17:30')  # 5:30 PM IST
+        # Get scheduled time (5:30 PM IST for shorts)
+        scheduled_time = self._get_scheduled_publish_time('17:30')
         
-        logger.info(f"📅 Long video scheduled for: {long_scheduled_time} UTC (5:00 PM IST)")
-        logger.info(f"📅 Short video scheduled for: {short_scheduled_time} UTC (5:30 PM IST)")
+        logger.info(f"📅 Video scheduled for: {scheduled_time} UTC (5:30 PM IST)")
         
-        # Upload long video first
-        logger.info("🎬 Uploading LONG video...")
-        long_metadata = self._prepare_video_metadata('long', long_scheduled_time)
-        self.long_video_id = self._upload_video_with_retry(long_video, long_metadata)
+        # Upload video
+        logger.info("🎬 Uploading SHORTS video...")
+        metadata = self._prepare_video_metadata('shorts', scheduled_time)
+        self.video_id = self._upload_video_with_retry(video_file, metadata)
         
-        # Upload short video
-        logger.info("🎬 Uploading SHORT video...")
-        short_metadata = self._prepare_video_metadata('short', short_scheduled_time)
-        self.short_video_id = self._upload_video_with_retry(short_video, short_metadata)
+        # Upload thumbnail if available
+        thumbnail_path = self.files_dir / 'thumbnail.jpg'
+        if not thumbnail_path.exists():
+            thumbnail_path = next(self.files_dir.glob('thumbnail*.jpg'), None)
         
-        # Update short video metadata with internal YouTube linking
-        logger.info("🔗 Updating internal video linking...")
-        script_data = self._load_json_file('script.json')
-        short_metadata['snippet']['description'] += f"\n\n#LongVideo {self.long_video_id}"
-        
-        self._update_video_metadata(self.short_video_id, short_metadata)
+        if thumbnail_path:
+            self._upload_thumbnail(self.video_id, thumbnail_path)
         
         # Log results
         logger.info("=" * 50)
         logger.info("✅ UPLOAD COMPLETE")
-        logger.info(f"📹 Long Video ID: {self.long_video_id}")
-        logger.info(f"📱 Short Video ID: {self.short_video_id}")
-        logger.info(f"⏰ Long Scheduled: {long_scheduled_time} UTC")
-        logger.info(f"⏰ Short Scheduled: {short_scheduled_time} UTC")
+        logger.info(f"📱 Video ID: {self.video_id}")
+        logger.info(f"⏰ Scheduled: {scheduled_time} UTC")
+        logger.info(f"🔗 URL: https://youtube.com/shorts/{self.video_id}")
         logger.info("=" * 50)
         
-        return self.long_video_id, self.short_video_id
+        return self.video_id
 
 def main():
-    parser = argparse.ArgumentParser(description='Upload videos directly to YouTube')
+    parser = argparse.ArgumentParser(description='Upload videos directly to YouTube - Multi-Channel Support')
     parser.add_argument('--channel-id', required=True, help='YouTube channel ID for token lookup')
     parser.add_argument('--files-dir', required=True, help='Directory containing video files')
+    parser.add_argument('--video-type', default='shorts', choices=['shorts', 'long'], 
+                       help='Video type: shorts or long')
     
     args = parser.parse_args()
     
     try:
-        uploader = YouTubeUploader(args.channel_id, Path(args.files_dir))
-        long_id, short_id = uploader.upload_videos()
+        uploader = YouTubeUploader(args.channel_id, Path(args.files_dir), args.video_type)
+        video_id = uploader.upload_video()
         
         # Create manifest
         manifest = {
             'run_id': os.getenv('RUN_ID'),
             'channel_id': args.channel_id,
-            'long_video_id': long_id,
-            'short_video_id': short_id,
-            'uploaded_at': datetime.utcnow().isoformat()
+            'video_id': video_id,
+            'video_type': args.video_type,
+            'uploaded_at': datetime.utcnow().isoformat(),
+            'video_url': f'https://youtube.com/shorts/{video_id}'
         }
         
         manifest_file = Path(args.files_dir) / 'youtube_manifest.json'
