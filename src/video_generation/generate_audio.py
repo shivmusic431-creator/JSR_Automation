@@ -518,17 +518,24 @@ class XTTSAudioGenerator:
     - Optimized segment boundaries for confident voice delivery
     """
     
-    def __init__(self, voice_preset: str = 'hi'):
+    def __init__(self, voice_preset: str = 'hi', voice_file: str = None):
         self.voice_preset = voice_preset
         self.language = XTTS_LANGUAGE
         self.tts: Optional[TTS] = None
         self.model_loaded = False
         self.heartbeat = HeartbeatLogger()
         
+        # Use custom voice file if provided, otherwise use default
+        self.voice_clone_file = voice_file if voice_file else VOICE_CLONE_FILE
+        
         # Always use voice cloning
-        if not os.path.exists(VOICE_CLONE_FILE):
-            log(f"⚠️ WARNING: Voice clone file not found at {VOICE_CLONE_FILE}")
-            log("   Please ensure voices/my_voice.wav exists for studio-quality output")
+        if not os.path.exists(self.voice_clone_file):
+            log(f"⚠️ WARNING: Voice clone file not found at {self.voice_clone_file}")
+            log(f"   Please ensure {self.voice_clone_file} exists for studio-quality output")
+            # Fallback to default
+            if os.path.exists(VOICE_CLONE_FILE):
+                log(f"   Falling back to default voice: {VOICE_CLONE_FILE}")
+                self.voice_clone_file = VOICE_CLONE_FILE
     
     def load_model(self):
         """Load XTTS v2 model ONCE per process"""
@@ -546,7 +553,7 @@ class XTTSAudioGenerator:
         log("🔄 Loading XTTS v2 model...")
         log(f"   Model: {XTTS_MODEL_NAME}")
         log(f"   Language: {self.language}")
-        log(f"   Using voice clone: {VOICE_CLONE_FILE if os.path.exists(VOICE_CLONE_FILE) else 'NOT FOUND'}")
+        log(f"   Using voice clone: {self.voice_clone_file if os.path.exists(self.voice_clone_file) else 'NOT FOUND'}")
         
         self.heartbeat.start("Loading XTTS v2 model...")
         
@@ -666,7 +673,7 @@ class XTTSAudioGenerator:
                 try:
                     self.tts.tts_to_file(
                         text=segment,
-                        speaker_wav=VOICE_CLONE_FILE,
+                        speaker_wav=self.voice_clone_file,
                         language=self.language,
                         file_path=str(temp_file)
                     )
@@ -702,7 +709,7 @@ class XTTSAudioGenerator:
                         log(f"  ⚠️ Trying fallback generation for segment {i+1}")
                         wav_list = self.tts.tts(
                             text=segment,
-                            speaker_wav=VOICE_CLONE_FILE,
+                            speaker_wav=self.voice_clone_file,
                             language=self.language
                         )
                         
@@ -950,11 +957,12 @@ class AudioGenerationOrchestrator:
     **FIX: Direct chunk loading from Gemini output - NO ScriptChunker**
     """
     
-    def __init__(self, script_file: str, run_id: str, voice_preset: str = 'hi', script_type: str = 'long'):
+    def __init__(self, script_file: str, run_id: str, voice_preset: str = 'hi', script_type: str = 'long', voice_file: str = None):
         self.script_file = script_file
         self.run_id = run_id
         self.voice_preset = voice_preset
         self.script_type = script_type
+        self.voice_file = voice_file
         
         self.script_data: Optional[Dict] = None
         self.chunks: List[ChunkMetadata] = []
@@ -1163,7 +1171,7 @@ class AudioGenerationOrchestrator:
         self.session_manager = SessionManager(self.run_id, self.script_file, self.script_type)
         self.session_manager.load_or_create_session(self.chunks, self.voice_preset)
         
-        self.xtts_generator = XTTSAudioGenerator(self.voice_preset)
+        self.xtts_generator = XTTSAudioGenerator(self.voice_preset, self.voice_file)
         self.xtts_generator.load_model()
         
         log(f"\n🎬 Starting generation of {len(self.chunks)} chunks for {self.script_type}...")
@@ -1243,7 +1251,7 @@ class AudioGenerationOrchestrator:
         )
         self.session_manager.session = SessionState(**session_data)
         
-        self.xtts_generator = XTTSAudioGenerator(self.voice_preset)
+        self.xtts_generator = XTTSAudioGenerator(self.voice_preset, self.voice_file)
         self.xtts_generator.load_model()
         
         return self._generate_single_chunk(chunk)
@@ -1496,6 +1504,8 @@ Examples:
                        help='Voice preset/language (default: hi for Hindi)')
     parser.add_argument('--script-type', type=str, choices=['long', 'short'], default='long',
                        help='Script type: long (10-15 min) or short (45-60 sec)')
+    parser.add_argument('--voice-file', type=str, default=None,
+                       help='Path to custom voice file for cloning (e.g., voices/voice1.wav)')
     
     # Mode selection
     parser.add_argument('--prepare', action='store_true',
@@ -1526,12 +1536,13 @@ Examples:
     if not args.script_file or not args.run_id:
         parser.error('--script-file and --run-id are required (unless using --status or --stitch)')
     
-    # Create orchestrator with script type
+    # Create orchestrator with script type and voice file
     orchestrator = AudioGenerationOrchestrator(
         args.script_file,
         args.run_id,
         args.voice_preset,
-        args.script_type
+        args.script_type,
+        args.voice_file
     )
     
     # Execute based on mode
