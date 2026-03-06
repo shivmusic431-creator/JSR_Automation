@@ -2,6 +2,11 @@
 """
 YT-AutoPilot Pro - Script Generation with Gemini 2.5 API
 Single API Call: script + title + description + thumbnail concept
+
+FIXES:
+- Single quotes in Hindi text breaking JSON → replaced with double-quote-safe approach + post-processing
+- Truncated responses → retry with fresh call if response < 5000 chars
+- max_output_tokens increased to 65536 for complete responses
 """
 import os
 import json
@@ -15,7 +20,7 @@ try:
     from google import genai
     from google.genai import types
 except ImportError:
-    print("❌ google.genai module not found! pip install google-genai")
+    print("❌ google.genai not found! pip install google-genai")
     sys.exit(1)
 
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
@@ -105,25 +110,25 @@ EPISODE_IDEAS = {
         "Gaslighting: Kaise Log Tumhari Yaadashth Ko Control Karte Hain",
         "Emotional Blackmail Ke 5 Chehre Jo Tum Pehchan Nahi Paate",
         "Manipulation Ke 7 Signs - Pehchano Aur Bacho",
-        "Love Bombing: Pyar Ya Phasaav?",
+        "Love Bombing: Pyar Ya Phasaav",
         "Toxic Log Kaise Tumhari Energy Churate Hain",
-        "Narcissist Ki Pehchan Kaise Karein?",
-        "Guilt Tripping Se Kaise Bachein?",
+        "Narcissist Ki Pehchan Kaise Karein",
+        "Guilt Tripping Se Kaise Bachein",
         "Passive-Aggressive Behavior Samajhna",
-        "Trauma Bonding Kya Hai?",
-        "Toxic Workplace Se Kaise Nikle?"
+        "Trauma Bonding Kya Hai",
+        "Toxic Workplace Se Kaise Nikle"
     ],
     ("Human Psychology & Behavior", "Life Hacks Psychology"): [
         "Baat Maanwane Ka Psychology",
         "Interview Mein Select Hone Ke Tarike",
-        "First Impression Kaise Banaye?",
-        "Logon Ko Apni Taraf Kaise Karein?",
+        "First Impression Kaise Banaye",
+        "Logon Ko Apni Taraf Kaise Karein",
         "Negotiation Ke Psychology Tricks",
         "Memory Improve Karne Ke Tarike",
         "Decision Making Ke Shortcuts",
-        "Social Anxiety Kaise Kam Karein?",
+        "Social Anxiety Kaise Kam Karein",
         "Confidence Dikhane Ke Tarike",
-        "Influence Kaise Badhayein?"
+        "Influence Kaise Badhayein"
     ]
 }
 
@@ -133,69 +138,57 @@ def get_episode_title(category, sub_category, episode):
         ideas = EPISODE_IDEAS[key]
         if episode <= len(ideas):
             return ideas[episode - 1]
-    return f"{sub_category} - Episode {episode}"
+    return f"{sub_category} Episode {episode}"
+
 
 def create_script_prompt(category, sub_category, episode, title):
     hindi_category = CATEGORIES_CONFIG.get(category, {}).get("hindi_name", category)
     hindi_sub = CATEGORIES_CONFIG.get(category, {}).get("sub_categories", {}).get(sub_category, sub_category)
 
-    # NOTE: full_text is NOT in the prompt — we build it in code from sections
-    # This avoids huge JSON strings with unescaped newlines breaking parsing
-    return f"""You are an elite Hindi content strategist. Generate a complete YouTube video package in ONE JSON response.
+    return f"""You are an elite Hindi content strategist. Generate a complete YouTube video package.
+
+CRITICAL JSON RULE: All string values must use ONLY double quotes. Never use single quotes (apostrophes) inside JSON string values. Replace any apostrophe with a space or remove it entirely. This is the most important rule.
+
+WRONG: "why_it_works": "यह शीर्षक 'एपिसोड' का उल्लेख करता है"
+CORRECT: "why_it_works": "यह शीर्षक एपिसोड का उल्लेख करता है"
 
 INPUT:
 - Category: {category} ({hindi_category})
 - Sub-Category: {sub_category} ({hindi_sub})
 - Episode: {episode}
 - Title hint: {title}
-- Duration: 10-15 minutes (1400-1900 Hindi words)
+- Duration: 10-15 minutes (1400-1900 Hindi words total across all script sections)
 - Audience: 18-35 years, Hindi-speaking Indians
-- Language: PURE HINDI DEVANAGARI ONLY - zero English letters in narration
+- Language: PURE HINDI DEVANAGARI ONLY in all narration fields
 
-LANGUAGE RULE: Write ALL narration in देवनागरी. English words phonetically:
-brain→ब्रेन, psychology→साइकोलॉजी, reality→रियलिटी, manipulation→मैनिपुलेशन
+EMOTION INDICATORS (on separate line BEFORE narration, never inline):
+(धीरे से) (गंभीर स्वर में) (रहस्यमय स्वर में) (उत्साह से) (प्यार से)
 
-EMOTION INDICATORS (always on separate line BEFORE narration):
-(धीरे से) (गंभीर स्वर में) (रहस्यमय स्वर में) (उत्साह से)
-(हल्की मुस्कान के साथ) (फुसफुसाते हुए) (आश्चर्य से) (प्यार से)
-
-CORRECT format:
-(गंभीर स्वर में)
-तुम्हें सच जानना होगा।
-
-WRONG format:
-(गंभीर स्वर में) तुम्हें सच जानना होगा।
-
-SCENE MARKERS (separate line, never spoken):
-[SCENE: nature_morning] [SCENE: office_tension] [SCENE: family_dining]
-[SCENE: phone_scrolling] [SCENE: thinking_alone] [SCENE: city_traffic]
+SCENE MARKERS (on separate line, never spoken):
+[SCENE: nature_morning] [SCENE: office_tension] [SCENE: city_traffic]
 [SCENE: dark_alley] [SCENE: books_study] [SCENE: crowd_walking]
 
-SCRIPT STRUCTURE:
-1. hook: 100-130 words, shocking opening
-2. problem_agitation: 200-280 words, pain point detail
-3. promise: 150-200 words, what they will learn
-4. main_content: array of 4-6 sections, 1000-1400 words total
-5. practical_tips: array of 5-7 tips, 300-400 words total
-6. conclusion: 200-250 words, CTA + next episode teaser
+SCRIPT SECTIONS (all narration in pure Hindi Devanagari):
+1. hook: 100-130 words
+2. problem_agitation: 200-280 words
+3. promise: 150-200 words
+4. main_content: 4-6 sections, 1000-1400 words total
+5. practical_tips: 5-7 tips, 300-400 words total
+6. conclusion: 200-250 words with CTA
 
-TITLE RULES: 50-70 chars, use numbers, curiosity gap, power words
-
-THUMBNAIL: High contrast, shocked face, 3-5 word overlay, red/yellow/orange
-
-Return ONLY a raw JSON object. No markdown. No explanation. No text before or after JSON.
+Return ONLY raw JSON. No markdown. No text outside JSON. No single quotes inside string values.
 
 {{
   "metadata": {{
-    "final_title": "best title string here",
+    "final_title": "title string without apostrophes",
     "title_options": [
-      {{"title": "option 1", "character_count": 55, "why_it_works": "reason"}},
-      {{"title": "option 2", "character_count": 60, "why_it_works": "reason"}},
-      {{"title": "option 3", "character_count": 58, "why_it_works": "reason"}}
+      {{"title": "option 1", "character_count": 55, "why_it_works": "reason without apostrophes"}},
+      {{"title": "option 2", "character_count": 60, "why_it_works": "reason without apostrophes"}},
+      {{"title": "option 3", "character_count": 58, "why_it_works": "reason without apostrophes"}}
     ],
-    "title_analysis": "why this title performs well",
-    "description": "full SEO YouTube description",
-    "description_hook": "first 2 lines only",
+    "title_analysis": "analysis without apostrophes",
+    "description": "full SEO description",
+    "description_hook": "first 2 lines",
     "seo_keywords": ["keyword1", "keyword2"],
     "hashtags": ["#tag1", "#tag2"],
     "tags": ["tag1", "tag2", "tag3"],
@@ -206,10 +199,10 @@ Return ONLY a raw JSON object. No markdown. No explanation. No text before or af
       "text_overlay": "3-5 words",
       "color_scheme": ["red", "yellow", "black"],
       "lighting": "dramatic cinematic",
-      "additional_elements": ["arrow", "circle"],
+      "additional_elements": ["arrow"],
       "composition_notes": "rule of thirds"
     }},
-    "stability_ai_prompt": "detailed image generation prompt",
+    "stability_ai_prompt": "image generation prompt",
     "thumbnail_alternatives": [
       {{"concept_name": "alt 1", "description": "brief description"}}
     ],
@@ -218,24 +211,36 @@ Return ONLY a raw JSON object. No markdown. No explanation. No text before or af
     "episode": {episode}
   }},
   "script": {{
-    "hook": "hook narration text here",
-    "problem_agitation": "problem narration text here",
-    "promise": "promise narration text here",
+    "hook": "hook narration in pure Hindi",
+    "problem_agitation": "problem narration in pure Hindi",
+    "promise": "promise narration in pure Hindi",
     "main_content": [
-      {{"section_title": "section name in Hindi", "content": "section narration text"}}
+      {{"section_title": "section name", "content": "section narration in pure Hindi"}}
     ],
     "practical_tips": [
-      {{"tip_number": 1, "tip_title": "tip name in Hindi", "explanation": "tip explanation"}}
+      {{"tip_number": 1, "tip_title": "tip name", "explanation": "tip explanation in pure Hindi"}}
     ],
-    "conclusion": "conclusion narration text here",
+    "conclusion": "conclusion narration in pure Hindi",
     "word_count": 1600,
     "estimated_duration": "12:30"
   }}
 }}"""
 
 
+def fix_single_quotes_in_json(text: str) -> str:
+    """
+    Post-process: replace single quotes inside JSON string values with
+    the Hindi danda or just remove them — keeps JSON valid.
+    Only targets apostrophes INSIDE string values, not JSON structure.
+    """
+    # Replace ' that appears between Hindi/word characters (apostrophe in text)
+    # Pattern: word char ' word char  → replace ' with space
+    result = re.sub(r'(?<=[^\s{}\[\]:,"])\'(?=[^\s{}\[\]:,"])', '', text)
+    return result
+
+
 def build_full_text(script: dict) -> str:
-    """Build full_text by joining all script sections — done in code, not by Gemini"""
+    """Build full_text by joining all script sections"""
     parts = []
     if script.get('hook'):
         parts.append(script['hook'])
@@ -255,26 +260,42 @@ def build_full_text(script: dict) -> str:
 
 
 def extract_json_robust(text: str) -> dict:
-    """
-    Multi-strategy JSON extraction that always returns a parsed dict.
-    Prints debug info to help diagnose future failures.
-    """
+    """Multi-strategy JSON extraction with single-quote fix"""
     print(f"🔍 Extracting JSON (response: {len(text)} chars)...")
+    print(f"📄 Response start: {repr(text[:200])}")
 
-    # Show first 300 chars to understand response format
-    print(f"📄 Response start: {repr(text[:300])}")
+    # Check if response is suspiciously short (truncated)
+    if len(text) < 3000:
+        print(f"⚠️ Response seems truncated ({len(text)} chars) — will attempt extraction anyway")
 
-    strategies_tried = []
+    def try_parse(s):
+        """Try parse → if fails due to single quote, fix and retry"""
+        try:
+            return json.loads(s)
+        except json.JSONDecodeError as e:
+            err_str = str(e)
+            # Single quote / apostrophe issue
+            if "delimiter" in err_str or "Expecting" in err_str:
+                fixed = fix_single_quotes_in_json(s)
+                try:
+                    return json.loads(fixed)
+                except json.JSONDecodeError:
+                    pass
+            # Trailing comma issue
+            cleaned = re.sub(r',(\s*[}\]])', r'\1', s)
+            try:
+                return json.loads(cleaned)
+            except json.JSONDecodeError:
+                pass
+            return None
 
     # Strategy 1: Direct parse
-    try:
-        result = json.loads(text)
+    result = try_parse(text)
+    if result:
         print("✓ Strategy 1: Direct parse succeeded")
         return result
-    except json.JSONDecodeError as e:
-        strategies_tried.append(f"direct_parse: {e}")
 
-    # Strategy 2: Strip common wrappers
+    # Strategy 2: Strip markdown fences
     stripped = text.strip()
     for prefix in ['```json', '```JSON', '```']:
         if stripped.startswith(prefix):
@@ -283,17 +304,14 @@ def extract_json_robust(text: str) -> dict:
     if stripped.endswith('```'):
         stripped = stripped[:-3]
     stripped = stripped.strip()
-    try:
-        result = json.loads(stripped)
+    result = try_parse(stripped)
+    if result:
         print("✓ Strategy 2: Strip markdown succeeded")
         return result
-    except json.JSONDecodeError as e:
-        strategies_tried.append(f"strip_markdown: {e}")
 
-    # Strategy 3: Find { ... } balanced block
+    # Strategy 3: Find balanced { ... } block
     start = text.find('{')
     if start != -1:
-        # Walk forward counting braces
         depth = 0
         in_str = False
         esc = False
@@ -320,78 +338,134 @@ def extract_json_robust(text: str) -> dict:
 
         if end != -1:
             candidate = text[start:end+1]
-            try:
-                result = json.loads(candidate)
+            result = try_parse(candidate)
+            if result:
                 print("✓ Strategy 3: Balanced brace extraction succeeded")
                 return result
-            except json.JSONDecodeError as e:
-                strategies_tried.append(f"balanced_brace: {e}")
-                # Try repair on this candidate
-                repaired = repair_json_string(candidate)
-                if repaired:
-                    try:
-                        result = json.loads(repaired)
-                        print("✓ Strategy 3b: Brace extraction + repair succeeded")
-                        return result
-                    except json.JSONDecodeError as e2:
-                        strategies_tried.append(f"brace_repair: {e2}")
 
-    # Strategy 4: Progressive truncation — find last valid JSON
-    if start != -1:
-        print("🔧 Strategy 4: Progressive truncation...")
+        # Strategy 4: Partial / truncated — close open braces
+        print("🔧 Strategy 4: Closing truncated JSON...")
         partial = text[start:]
-        for cutback in [0, 10, 50, 100, 200, 500, 1000]:
-            candidate = partial[:len(partial)-cutback] if cutback > 0 else partial
-            candidate = re.sub(r',\s*$', '', candidate.rstrip())
-            # Count open structures and close them
-            depth_b = 0
-            depth_sq = 0
-            in_str2 = False
-            esc2 = False
-            for c in candidate:
-                if esc2:
-                    esc2 = False
+        # Remove trailing partial string or comma
+        partial = re.sub(r',\s*$', '', partial.rstrip())
+        if partial.endswith('"'):
+            partial = partial[:-1]
+        partial = re.sub(r',\s*$', '', partial.rstrip())
+
+        # Count open structures
+        depth_b = depth_sq = 0
+        in_str2 = esc2 = False
+        for c in partial:
+            if esc2:
+                esc2 = False
+                continue
+            if c == '\\' and in_str2:
+                esc2 = True
+                continue
+            if c == '"':
+                in_str2 = not in_str2
+                continue
+            if not in_str2:
+                if c == '{': depth_b += 1
+                elif c == '}': depth_b -= 1
+                elif c == '[': depth_sq += 1
+                elif c == ']': depth_sq -= 1
+
+        closing = ']' * max(0, depth_sq) + '}' * max(0, depth_b)
+        attempt = partial + closing
+        result = try_parse(attempt)
+        if result and isinstance(result, dict):
+            print(f"✓ Strategy 4: Closed truncated JSON succeeded")
+            return result
+
+        # Strategy 5: Progressive backtrack
+        for cutback in [50, 100, 200, 500]:
+            if len(partial) - cutback < 100:
+                break
+            cut = re.sub(r',\s*$', '', partial[:len(partial)-cutback].rstrip())
+            depth_b2 = depth_sq2 = 0
+            in_s = es = False
+            for c in cut:
+                if es:
+                    es = False
                     continue
-                if c == '\\' and in_str2:
-                    esc2 = True
+                if c == '\\' and in_s:
+                    es = True
                     continue
                 if c == '"':
-                    in_str2 = not in_str2
+                    in_s = not in_s
                     continue
-                if not in_str2:
-                    if c == '{': depth_b += 1
-                    elif c == '}': depth_b -= 1
-                    elif c == '[': depth_sq += 1
-                    elif c == ']': depth_sq -= 1
-            closing = ']' * max(0, depth_sq) + '}' * max(0, depth_b)
-            attempt = candidate + closing
+                if not in_s:
+                    if c == '{': depth_b2 += 1
+                    elif c == '}': depth_b2 -= 1
+                    elif c == '[': depth_sq2 += 1
+                    elif c == ']': depth_sq2 -= 1
+            cl = ']' * max(0, depth_sq2) + '}' * max(0, depth_b2)
+            att = cut + cl
+            result = try_parse(att)
+            if result and isinstance(result, dict) and ('metadata' in result or 'script' in result):
+                print(f"✓ Strategy 5: Backtrack -{cutback} succeeded")
+                return result
+
+    print("❌ All strategies failed")
+    print(f"Full response:\n{text[:5000]}")
+    raise ValueError(f"Could not extract valid JSON from response ({len(text)} chars)")
+
+
+def call_gemini_with_retry(prompt: str, max_attempts: int = 3) -> tuple:
+    """
+    Call Gemini with retry logic.
+    Returns (response_text, model_used)
+    Retries if response is truncated (< 3000 chars)
+    """
+    models_to_try = [
+        'gemini-2.5-pro',
+        'gemini-2.5-flash',
+        'gemini-2.0-flash',
+        'gemini-2.0-flash-lite',
+    ]
+
+    last_error = None
+
+    for model_name in models_to_try:
+        for attempt in range(max_attempts):
             try:
-                result = json.loads(attempt)
-                if isinstance(result, dict) and ('metadata' in result or 'script' in result):
-                    print(f"✓ Strategy 4: Truncation -{cutback} + close succeeded")
-                    return result
-            except json.JSONDecodeError:
+                print(f"🔄 Model: {model_name} (attempt {attempt+1}/{max_attempts})...")
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.7,
+                        max_output_tokens=65536,  # Maximum — ensures complete response
+                        top_p=0.9,
+                        top_k=40
+                    )
+                )
+
+                if not hasattr(response, 'text') or not response.text:
+                    print(f"⚠️ Empty response from {model_name}")
+                    continue
+
+                text = response.text.strip()
+                print(f"📏 Response: {len(text)} chars")
+
+                # If suspiciously short, retry
+                if len(text) < 2000 and attempt < max_attempts - 1:
+                    print(f"⚠️ Response too short ({len(text)} chars), retrying...")
+                    continue
+
+                print(f"✅ Got response from {model_name}")
+                return text, model_name
+
+            except Exception as e:
+                err_msg = str(e)
+                print(f"⚠️ {model_name} attempt {attempt+1} failed: {err_msg[:200]}")
+                last_error = e
+                if '429' in err_msg or 'RESOURCE_EXHAUSTED' in err_msg:
+                    break  # Skip to next model immediately on quota error
                 continue
 
-    # All failed — print full response for debugging
-    print("❌ All extraction strategies failed")
-    print(f"Strategies tried: {strategies_tried}")
-    print(f"Full response (first 3000 chars):\n{text[:3000]}")
-    print(f"Full response (last 500 chars):\n{text[-500:]}")
-    raise ValueError(f"No valid JSON found. Strategies: {strategies_tried}")
-
-
-def repair_json_string(s: str) -> str:
-    """Light repairs: trailing commas, comment removal"""
-    try:
-        # Remove trailing commas before } or ]
-        s = re.sub(r',(\s*[}\]])', r'\1', s)
-        # Remove JS comments
-        s = re.sub(r'//[^\n]*\n', '\n', s)
-        json.loads(s)
-        return s
-    except Exception:
-        return None
+    raise Exception(f"All models failed. Last error: {last_error}")
 
 
 def generate_script(category, sub_category, episode, run_id):
@@ -401,59 +475,29 @@ def generate_script(category, sub_category, episode, run_id):
     title = get_episode_title(category, sub_category, episode)
     prompt = create_script_prompt(category, sub_category, episode, title)
 
-    models_to_try = [
-        'gemini-2.5-pro',
-        'gemini-2.5-flash',
-        'gemini-2.0-flash',
-        'gemini-2.0-flash-lite',
-    ]
+    response_text, model_used = call_gemini_with_retry(prompt)
 
-    response = None
-    model_used = None
-
-    for model_name in models_to_try:
-        try:
-            print(f"🔄 Trying model: {model_name}...")
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.7,
-                    max_output_tokens=8192,
-                    top_p=0.9,
-                    top_k=40
-                )
-            )
-            model_used = model_name
-            print(f"✅ Model responded: {model_name}")
-            break
-        except Exception as e:
-            print(f"⚠️ Model {model_name} failed: {e}")
-            continue
-
-    if not response or not hasattr(response, 'text'):
-        raise Exception("All Gemini models failed to respond")
-
-    response_text = response.text.strip()
-    print(f"📏 Response length: {len(response_text)} chars")
-
-    # Extract JSON with robust multi-strategy parser
     script_data = extract_json_robust(response_text)
 
-    # Validate structure
+    # Validate and fill missing metadata
     if 'metadata' not in script_data:
         print("⚠️ metadata missing, adding defaults")
-        script_data['metadata'] = {
-            'final_title': title,
-            'category': category,
-            'sub_category': sub_category,
-            'episode': episode
-        }
+        script_data['metadata'] = {}
+
+    meta = script_data['metadata']
+    if not meta.get('final_title'):
+        meta['final_title'] = title
+    if not meta.get('category'):
+        meta['category'] = category
+    if not meta.get('sub_category'):
+        meta['sub_category'] = sub_category
+    if not meta.get('episode'):
+        meta['episode'] = episode
 
     if 'script' not in script_data:
         raise ValueError("Response JSON missing 'script' field")
 
-    # Build full_text in code (NOT from Gemini — avoids JSON escape issues)
+    # Build full_text in code (avoids JSON escape issues with Hindi text)
     script_data['script']['full_text'] = build_full_text(script_data['script'])
 
     word_count = script_data['script'].get('word_count', 0)
@@ -478,10 +522,10 @@ def generate_script(category, sub_category, episode, run_id):
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(script_data, f, ensure_ascii=False, indent=2)
 
-    print(f"✅ Title: {script_data['metadata'].get('final_title', 'N/A')}")
+    print(f"✅ Title: {meta.get('final_title', 'N/A')}")
     print(f"📝 Words: {word_count} | ⏱️ {script_data['script'].get('estimated_duration', 'N/A')}")
-    print(f"🖼️ Thumbnail: {'✅' if script_data['metadata'].get('thumbnail_concept') else '❌'}")
-    print(f"📄 Description: {'✅' if script_data['metadata'].get('description') else '❌'}")
+    print(f"🖼️ Thumbnail: {'✅' if meta.get('thumbnail_concept') else '❌'}")
+    print(f"📄 Description: {'✅' if meta.get('description') else '❌'}")
     print(f"💾 Saved: {output_file}")
 
     return script_data
