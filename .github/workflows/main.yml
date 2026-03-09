@@ -568,6 +568,8 @@ jobs:
         id: upload
         env:
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           RUN_ID: ${{ env.RUN_ID }}
         run: |
           python src/youtube/upload_to_youtube.py \
