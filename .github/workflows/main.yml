@@ -1,0 +1,651 @@
+name: YT-AutoPilot - Video Production Pipeline
+
+on:
+  repository_dispatch:
+    types: [trigger-production]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'Run ID'
+        required: true
+      main_category:
+        description: 'Main Category'
+        required: true
+      sub_category:
+        description: 'Sub Category'
+        required: true
+      episode:
+        description: 'Episode Number'
+        required: true
+      channel_id:
+        description: 'YouTube Channel ID for Upload'
+        required: true
+        default: 'UCxxxxxxxxxxxxxxxxxxxxxxxxxx'
+      is_retry:
+        description: 'Is Retry'
+        default: 'false'
+      attempt:
+        description: 'Attempt Number'
+        default: '1'
+
+env:
+  PYTHON_VERSION: '3.10'
+  NODE_VERSION: '18'
+  COQUI_TOS_AGREED: '1'
+  RUN_ID: ${{ github.event.inputs.run_id || github.event.client_payload.run_id }}
+  MAIN_CATEGORY: ${{ github.event.inputs.main_category || github.event.client_payload.main_category }}
+  SUB_CATEGORY: ${{ github.event.inputs.sub_category || github.event.client_payload.sub_category }}
+  EPISODE: ${{ github.event.inputs.episode || github.event.client_payload.episode }}
+  CHANNEL_ID: ${{ github.event.inputs.channel_id || github.event.client_payload.channel_id }}
+  IS_RETRY: ${{ github.event.inputs.is_retry || github.event.client_payload.is_retry || 'false' }}
+  ATTEMPT: ${{ github.event.inputs.attempt || github.event.client_payload.attempt || '1' }}
+  TIER1_WEBHOOK_URL: ${{ secrets.TIER1_WEBHOOK_URL }}
+  TIER1_HEALTH_URL: ${{ secrets.TIER1_HEALTH_URL }}
+
+jobs:
+
+  # ============================================================
+  # Phase 1: Script Generation (Single Gemini API Call)
+  # Generates: script + title + description + thumbnail concept
+  # ============================================================
+  generate-script:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    outputs:
+      script_data: ${{ steps.script.outputs.script_data }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Dependencies
+        run: pip install -r src/video_generation/requirements.txt
+
+      - name: Generate Script + Title + Description + Thumbnail Concept
+        id: script
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python src/video_generation/generate_script.py \
+            --category "$MAIN_CATEGORY" \
+            --sub-category "$SUB_CATEGORY" \
+            --episode "$EPISODE" \
+            --run-id "$RUN_ID" \
+            --video-type short
+
+      - name: Upload Script Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: script-${{ env.RUN_ID }}
+          path: output/script.json
+          retention-days: 1
+
+      - name: Notify Tier 1
+        if: always()
+        env:
+          TIER1_WEBHOOK_URL: ${{ secrets.TIER1_WEBHOOK_URL }}
+          TIER1_HEALTH_URL: ${{ secrets.TIER1_HEALTH_URL }}
+        run: |
+          python src/video_generation/notify_webhook.py \
+            --action "script_generated" \
+            --run-id "$RUN_ID" \
+            --status "${{ job.status }}"
+
+  # ============================================================
+  # Phase 2: Audio Generation with XTTS v2
+  # ============================================================
+  generate-audio:
+    runs-on: ubuntu-latest
+    needs: generate-script
+    timeout-minutes: 360
+    outputs:
+      audio_duration: ${{ steps.audio.outputs.duration }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: pip install -r src/video_generation/requirements.txt
+
+      - name: Cache XTTS v2 Model
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/share/tts
+            ~/.cache/tts
+          key: xtts-v2-model-cache-v1
+          restore-keys: xtts-v2-model-cache-
+
+      - name: Install XTTS compatible dependencies
+        run: |
+          pip uninstall -y torch torchvision torchaudio transformers TTS || true
+          pip install torch==2.4.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install transformers==4.41.2
+          pip install TTS
+
+      - name: Verify Installation
+        run: |
+          python -c "import torch; print(f'✅ PyTorch {torch.__version__}')"
+          python -c "from TTS.api import TTS; print('✅ XTTS imported successfully')"
+
+      - name: Download Script Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: script-${{ env.RUN_ID }}
+          path: output/
+
+      - name: Generate Audio with XTTS v2
+        id: audio
+        run: |
+          python src/video_generation/generate_audio.py \
+            --script-file output/script.json \
+            --run-id "$RUN_ID"
+
+      - name: Validate Audio Duration
+        run: |
+          python src/video_generation/validate_duration.py \
+            --audio-file output/audio.wav \
+            --min-duration 60 \
+            --run-id "$RUN_ID"
+
+      - name: Upload Audio Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: audio-${{ env.RUN_ID }}
+          path: output/audio.wav
+          retention-days: 1
+
+      - name: Notify Tier 1
+        if: always()
+        env:
+          TIER1_WEBHOOK_URL: ${{ secrets.TIER1_WEBHOOK_URL }}
+          TIER1_HEALTH_URL: ${{ secrets.TIER1_HEALTH_URL }}
+        run: |
+          python src/video_generation/notify_webhook.py \
+            --action "audio_generated" \
+            --run-id "$RUN_ID" \
+            --status "${{ job.status }}"
+
+  # ============================================================
+  # Phase 2.5: Subtitle Generation with Vosk Hindi Model
+  # ============================================================
+  generate-subtitles:
+    runs-on: ubuntu-latest
+    needs: generate-audio
+    timeout-minutes: 30
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Python Dependencies
+        run: |
+          pip install -r src/video_generation/requirements.txt
+          pip install vosk>=0.3.45
+
+      - name: Download Audio Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: audio-${{ env.RUN_ID }}
+          path: output/
+
+      - name: Cache Vosk Hindi Model
+        id: cache-vosk
+        uses: actions/cache@v4
+        with:
+          path: models/vosk-model-hi-0.22
+          key: vosk-model-hi-0.22-${{ runner.os }}-v1
+          restore-keys: vosk-model-hi-0.22-
+
+      - name: Download Vosk Hindi Model (if not cached)
+        if: steps.cache-vosk.outputs.cache-hit != 'true'
+        run: |
+          chmod +x scripts/download_vosk_model.sh
+          ./scripts/download_vosk_model.sh
+
+      - name: Verify Model
+        run: |
+          if [ -d "models/vosk-model-hi-0.22" ]; then
+            echo "✅ Model verified"
+          else
+            echo "❌ Model missing"
+            exit 1
+          fi
+
+      - name: Generate Subtitles
+        env:
+          RUN_ID: ${{ env.RUN_ID }}
+        run: |
+          python src/video_generation/generate_subtitles.py \
+            --run-id "$RUN_ID" \
+            --audio-dir output/
+
+      - name: Validate Subtitles
+        run: |
+          if [ -f "output/subtitles.srt" ]; then
+            LINE_COUNT=$(wc -l < output/subtitles.srt)
+            SUB_COUNT=$((LINE_COUNT / 4))
+            echo "✅ Subtitles generated: $SUB_COUNT subtitles"
+            if grep -q "{\\\\an5}" output/subtitles.srt; then
+              echo "✅ Center alignment marker found"
+            else
+              echo "❌ Center alignment marker missing"
+              exit 1
+            fi
+          else
+            echo "❌ Subtitle file not found"
+            exit 1
+          fi
+
+      - name: Upload Subtitles Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: subtitles-${{ env.RUN_ID }}
+          path: output/subtitles.srt
+          retention-days: 1
+
+      - name: Notify Tier 1
+        if: always()
+        env:
+          TIER1_WEBHOOK_URL: ${{ secrets.TIER1_WEBHOOK_URL }}
+          TIER1_HEALTH_URL: ${{ secrets.TIER1_HEALTH_URL }}
+        run: |
+          python src/video_generation/notify_webhook.py \
+            --action "subtitles_generated" \
+            --run-id "$RUN_ID" \
+            --status "${{ job.status }}"
+
+  # ============================================================
+  # Phase 3: Asset Acquisition for Short Video (Portrait only)
+  # ============================================================
+  acquire-assets:
+    runs-on: ubuntu-latest
+    needs: generate-subtitles
+    timeout-minutes: 360
+    outputs:
+      clip_count: ${{ steps.assets.outputs.clip_count }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup FFmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v3
+        with:
+          ffmpeg-version: '6.1'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Dependencies
+        run: pip install -r src/video_generation/requirements.txt
+
+      - name: Download Script & Audio
+        uses: actions/download-artifact@v4
+        with:
+          name: script-${{ env.RUN_ID }}
+          path: output/
+      - uses: actions/download-artifact@v4
+        with:
+          name: audio-${{ env.RUN_ID }}
+          path: output/
+
+      - name: Download Stock Footage for Short Video
+        id: assets
+        env:
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          python src/video_generation/acquire_assets.py \
+            --script-file output/script.json \
+            --run-id "$RUN_ID" \
+            --video-type short
+
+      - name: Upload Assets Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: assets-${{ env.RUN_ID }}
+          path: output/clips/
+          retention-days: 1
+
+      - name: Notify Tier 1
+        if: always()
+        env:
+          TIER1_WEBHOOK_URL: ${{ secrets.TIER1_WEBHOOK_URL }}
+          TIER1_HEALTH_URL: ${{ secrets.TIER1_HEALTH_URL }}
+        run: |
+          python src/video_generation/notify_webhook.py \
+            --action "assets_downloaded" \
+            --run-id "$RUN_ID" \
+            --status "${{ job.status }}" \
+            --video-type "short"
+
+  # ============================================================
+  # Phase 4: Thumbnail Generation
+  # ============================================================
+  generate-thumbnail:
+    runs-on: ubuntu-latest
+    needs: generate-script
+    timeout-minutes: 360
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Dependencies
+        run: pip install -r src/video_generation/requirements.txt
+
+      - name: Download Script
+        uses: actions/download-artifact@v4
+        with:
+          name: script-${{ env.RUN_ID }}
+          path: output/
+
+      - name: Generate Thumbnail
+        run: |
+          python src/video_generation/generate_thumbnail.py \
+            --script-file output/script.json \
+            --run-id "$RUN_ID"
+
+      - name: Upload Thumbnail Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: thumbnail-${{ env.RUN_ID }}
+          path: output/thumbnail*.jpg
+          retention-days: 1
+
+      - name: Notify Tier 1
+        if: always()
+        env:
+          TIER1_WEBHOOK_URL: ${{ secrets.TIER1_WEBHOOK_URL }}
+          TIER1_HEALTH_URL: ${{ secrets.TIER1_HEALTH_URL }}
+        run: |
+          python src/video_generation/notify_webhook.py \
+            --action "thumbnail_generated" \
+            --run-id "$RUN_ID" \
+            --status "${{ job.status }}"
+
+  # ============================================================
+  # Phase 5: Short Video Editing with Hook, CTA, and Subtitles
+  # ============================================================
+  edit-video-short:
+    runs-on: ubuntu-latest
+    needs: [generate-audio, acquire-assets, generate-subtitles]
+    timeout-minutes: 360
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Dependencies
+        run: pip install -r src/video_generation/requirements.txt
+
+      - name: Setup FFmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v3
+        with:
+          ffmpeg-version: '6.1'
+
+      - name: Install Hindi Fonts
+        run: |
+          sudo apt update
+          sudo apt install -y fonts-noto fonts-noto-core fonts-noto-extra fonts-noto-ui-core fonts-noto-ui-extra
+          fc-cache -fv
+          echo "✅ Noto Sans Devanagari fonts installed"
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: output/
+          pattern: '*-${{ env.RUN_ID }}'
+
+      - name: Organize Files
+        run: |
+          mkdir -p output/final
+          if [ -d "output/script-${{ env.RUN_ID }}" ]; then
+            cp output/script-${{ env.RUN_ID }}/script.json output/ 2>/dev/null || true
+          fi
+          if [ -d "output/audio-${{ env.RUN_ID }}" ]; then
+            cp output/audio-${{ env.RUN_ID }}/*.wav output/ 2>/dev/null || true
+            echo "✅ Audio files copied"
+          fi
+          if [ -d "output/assets-${{ env.RUN_ID }}" ]; then
+            mkdir -p output/clips/
+            cp output/assets-${{ env.RUN_ID }}/* output/clips/ 2>/dev/null || true
+            cp output/assets-${{ env.RUN_ID }}/manifest.json output/clips/ 2>/dev/null || true
+            echo "✅ Assets and manifest copied"
+          fi
+          if [ -d "output/subtitles-${{ env.RUN_ID }}" ]; then
+            cp output/subtitles-${{ env.RUN_ID }}/subtitles.srt output/ 2>/dev/null || true
+            echo "✅ Subtitles copied"
+          fi
+          echo "📁 Files organized:"
+          ls -la output/
+
+      - name: Generate Viral Hook
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python src/shorts/hook_generator.py \
+            --script-file output/script.json \
+            --run-id "$RUN_ID"
+
+      - name: Generate CTA
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python src/shorts/cta_generator.py \
+            --script-file output/script.json \
+            --run-id "$RUN_ID"
+
+      - name: Edit Short Video with Hook, CTA, and Subtitles
+        run: |
+          python src/video_generation/edit_video.py \
+            --type short \
+            --script-file output/script.json \
+            --clips-dir output/clips/ \
+            --subtitles-file output/subtitles.srt \
+            --run-id "$RUN_ID" \
+            --hook-file output/hook.json \
+            --cta-file output/cta.json \
+            --audio-dir output/
+
+      - name: Quality Check
+        run: |
+          python src/video_generation/quality_check.py \
+            --video output/final/short_video.mp4 \
+            --type short
+
+      - name: Upload Short Video
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-short-${{ env.RUN_ID }}
+          path: output/final/short_video.mp4
+          retention-days: 1
+
+      - name: Notify Tier 1
+        if: always()
+        env:
+          TIER1_WEBHOOK_URL: ${{ secrets.TIER1_WEBHOOK_URL }}
+          TIER1_HEALTH_URL: ${{ secrets.TIER1_HEALTH_URL }}
+        run: |
+          python src/video_generation/notify_webhook.py \
+            --action "video_rendered" \
+            --run-id "$RUN_ID" \
+            --status "${{ job.status }}" \
+            --video-type "short"
+
+  # ============================================================
+  # Phase 6: YouTube Upload
+  # ============================================================
+  upload-to-youtube:
+    runs-on: ubuntu-latest
+    needs: [edit-video-short, generate-thumbnail]
+    timeout-minutes: 360
+    outputs:
+      short_video_id: ${{ steps.upload.outputs.short_video_id }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Dependencies
+        run: |
+          pip install -r src/video_generation/requirements.txt
+          pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client firebase-admin pytz
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: output/
+          pattern: '*-${{ env.RUN_ID }}'
+
+      - name: Organize Files for Upload
+        run: |
+          mkdir -p output/upload
+          if [ -d "output/video-short-${{ env.RUN_ID }}" ]; then
+            cp output/video-short-${{ env.RUN_ID }}/short_video.mp4 output/upload/ 2>/dev/null || echo "⚠️ Short video not found"
+          fi
+          if [ -d "output/thumbnail-${{ env.RUN_ID }}" ]; then
+            cp output/thumbnail-${{ env.RUN_ID }}/thumbnail*.jpg output/upload/thumbnail.jpg 2>/dev/null || echo "⚠️ Thumbnail not found"
+          fi
+          if [ -d "output/script-${{ env.RUN_ID }}" ]; then
+            cp output/script-${{ env.RUN_ID }}/script.json output/upload/ 2>/dev/null || echo "⚠️ Script not found"
+          fi
+          if [ -d "output/subtitles-${{ env.RUN_ID }}" ]; then
+            cp output/subtitles-${{ env.RUN_ID }}/subtitles.srt output/upload/ 2>/dev/null || true
+          fi
+          echo "📁 Files ready for upload:"
+          ls -la output/upload/
+
+      - name: Verify Upload Files
+        run: |
+          MISSING=0
+          for file in "short_video.mp4" "script.json"; do
+            if [ ! -f "output/upload/$file" ]; then
+              echo "❌ Missing: $file"
+              MISSING=$((MISSING + 1))
+            else
+              echo "✅ Found: $file ($(du -h output/upload/$file | cut -f1))"
+            fi
+          done
+          if [ $MISSING -gt 0 ]; then
+            echo "❌ Cannot proceed: $MISSING required files missing"
+            exit 1
+          fi
+
+      - name: Upload to YouTube
+        id: upload
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          RUN_ID: ${{ env.RUN_ID }}
+        run: |
+          python src/youtube/upload_to_youtube.py \
+            --channel-id "${{ env.CHANNEL_ID }}" \
+            --files-dir output/upload/
+
+          if [ -f "output/upload/youtube_manifest.json" ]; then
+            SHORT_VIDEO_ID=$(jq -r '.short_video_id' output/upload/youtube_manifest.json)
+            echo "short_video_id=$SHORT_VIDEO_ID" >> $GITHUB_OUTPUT
+            echo "✅ Short Video ID: $SHORT_VIDEO_ID"
+          fi
+
+      - name: Notify Tier 1 - Upload Complete
+        env:
+          TIER1_WEBHOOK_URL: ${{ secrets.TIER1_WEBHOOK_URL }}
+          TIER1_HEALTH_URL: ${{ secrets.TIER1_HEALTH_URL }}
+        run: |
+          python src/video_generation/notify_webhook.py \
+            --action "youtube_upload_complete" \
+            --run-id "$RUN_ID" \
+            --status "success" \
+            --short-video-id "${{ steps.upload.outputs.short_video_id }}"
+
+  # ============================================================
+  # Phase 7: Final Success Notification
+  # ============================================================
+  notify-success:
+    runs-on: ubuntu-latest
+    needs: [upload-to-youtube]
+    if: success()
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: pip install requests
+
+      - name: Notify Complete Success
+        env:
+          TIER1_WEBHOOK_URL: ${{ secrets.TIER1_WEBHOOK_URL }}
+          TIER1_HEALTH_URL: ${{ secrets.TIER1_HEALTH_URL }}
+        run: |
+          python src/video_generation/notify_webhook.py \
+            --action "pipeline_complete" \
+            --run-id "$RUN_ID" \
+            --status "success" \
+            --short-video-id "${{ needs.upload-to-youtube.outputs.short_video_id }}"
+
+          echo "✅ Pipeline completed successfully!"
+          echo "📱 Short Video: https://youtube.com/shorts/${{ needs.upload-to-youtube.outputs.short_video_id }}"
+
+  # ============================================================
+  # Phase 8: Cleanup
+  # ============================================================
+  cleanup:
+    runs-on: ubuntu-latest
+    needs: [upload-to-youtube, notify-success]
+    if: always()
+    steps:
+      - name: Cleanup Artifacts
+        uses: geekyeggo/delete-artifact@v4
+        with:
+          name: |
+            script-${{ env.RUN_ID }}
+            audio-${{ env.RUN_ID }}
+            assets-${{ env.RUN_ID }}
+            thumbnail-${{ env.RUN_ID }}
+            subtitles-${{ env.RUN_ID }}
+            video-short-${{ env.RUN_ID }}
+          failOnError: false
+
+      - name: Final Status
+        run: |
+          echo "==================================="
+          echo "📊 WORKFLOW SUMMARY"
+          echo "==================================="
+          echo "Run ID: $RUN_ID"
+          echo "Category: $MAIN_CATEGORY / $SUB_CATEGORY"
+          echo "Episode: $EPISODE"
+          echo "Channel: $CHANNEL_ID"
+          echo "==================================="
