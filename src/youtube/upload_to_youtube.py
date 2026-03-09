@@ -62,28 +62,38 @@ class YouTubeUploader:
         try:
             clean_channel_id = self.channel_id.strip()
             logger.info(f"🔍 Looking up token for channel: {clean_channel_id}")
-            doc_ref = self.db.collection('youtube_tokens').document(clean_channel_id)
+
+            # Collection: userTokens (saved by JSR_Auto Node.js OAuth flow)
+            doc_ref = self.db.collection('userTokens').document(clean_channel_id)
             doc = doc_ref.get()
             if not doc.exists:
                 logger.error("=" * 60)
-                logger.error("❌ SETUP REQUIRED: YouTube OAuth token not found in Firestore!")
+                logger.error("❌ Token not found in Firestore!")
                 logger.error(f"   Channel ID: {clean_channel_id}")
-                logger.error("   You need to run the OAuth setup script ONCE to store tokens:")
-                logger.error("   1. Run: python src/youtube/setup_oauth.py --channel-id " + clean_channel_id)
-                logger.error("   2. This will open a browser for Google login")
-                logger.error("   3. Tokens will be saved to Firestore automatically")
-                logger.error("   4. After setup, re-run this workflow")
+                logger.error("   Please connect your YouTube channel via the JSR_Auto dashboard first.")
                 logger.error("=" * 60)
-                raise ValueError(
-                    f"No YouTube OAuth token found for channel: {clean_channel_id}. "
-                    f"Run: python src/youtube/setup_oauth.py --channel-id {clean_channel_id}"
-                )
-            token_data = doc.to_dict()
-            required_fields = ['access_token', 'refresh_token', 'client_id', 'client_secret']
-            missing = [f for f in required_fields if f not in token_data]
+                raise ValueError(f"No token found for channel: {clean_channel_id}")
+
+            data = doc.to_dict()
+
+            # Node.js saves: accessToken, refreshToken (camelCase)
+            required_fields = ['accessToken', 'refreshToken']
+            missing = [f for f in required_fields if not data.get(f)]
             if missing:
                 raise ValueError(f"Token document missing fields: {', '.join(missing)}")
-            return token_data
+
+            # client_id and client_secret come from env vars (set in GitHub Secrets)
+            client_id = os.getenv('YOUTUBE_CLIENT_ID')
+            client_secret = os.getenv('YOUTUBE_CLIENT_SECRET')
+            if not client_id or not client_secret:
+                raise ValueError("YOUTUBE_CLIENT_ID or YOUTUBE_CLIENT_SECRET env vars not set")
+
+            return {
+                'access_token': data['accessToken'],
+                'refresh_token': data['refreshToken'],
+                'client_id': client_id,
+                'client_secret': client_secret,
+            }
         except Exception as e:
             logger.error(f"❌ Firestore token fetch failed: {e}")
             raise
@@ -102,10 +112,12 @@ class YouTubeUploader:
             if creds.expired and creds.refresh_token:
                 logger.info("🔄 Refreshing expired token...")
                 creds.refresh(Request())
-                self.db.collection('youtube_tokens').document(self.channel_id.strip()).update({
-                    'access_token': creds.token
+                # Save refreshed token back to userTokens collection (camelCase)
+                self.db.collection('userTokens').document(self.channel_id.strip()).update({
+                    'accessToken': creds.token,
+                    'updatedAt': datetime.now().isoformat()
                 })
-                logger.info("✅ Token refreshed")
+                logger.info("✅ Token refreshed and saved")
             self.youtube = build(YT_API_SERVICE_NAME, YT_API_VERSION, credentials=creds)
             logger.info("✅ YouTube client initialized")
         except Exception as e:
