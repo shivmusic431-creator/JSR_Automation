@@ -82,11 +82,22 @@ class YouTubeUploader:
             if missing:
                 raise ValueError(f"Token document missing fields: {', '.join(missing)}")
 
-            # client_id and client_secret come from env vars (set in GitHub Secrets)
-            client_id = os.getenv('YOUTUBE_CLIENT_ID')
-            client_secret = os.getenv('YOUTUBE_CLIENT_SECRET')
+            # client_id and client_secret: first check Firestore doc, then env vars
+            client_id = (
+                data.get('clientId') or
+                data.get('client_id') or
+                os.getenv('YOUTUBE_CLIENT_ID')
+            )
+            client_secret = (
+                data.get('clientSecret') or
+                data.get('client_secret') or
+                os.getenv('YOUTUBE_CLIENT_SECRET')
+            )
             if not client_id or not client_secret:
-                raise ValueError("YOUTUBE_CLIENT_ID or YOUTUBE_CLIENT_SECRET env vars not set")
+                raise ValueError(
+                    "YouTube OAuth client credentials not found. "
+                    "Add YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET to GitHub Secrets."
+                )
 
             return {
                 'access_token': data['accessToken'],
