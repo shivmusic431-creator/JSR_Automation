@@ -236,22 +236,19 @@ jobs:
         run: |
           python src/video_generation/generate_subtitles.py \
             --run-id "$RUN_ID" \
-            --audio-dir output/
+            --audio-dir output/ \
+            --video-type short
 
       - name: Validate Subtitles
         run: |
-          if [ -f "output/subtitles.srt" ]; then
-            LINE_COUNT=$(wc -l < output/subtitles.srt)
-            SUB_COUNT=$((LINE_COUNT / 4))
-            echo "✅ Subtitles generated: $SUB_COUNT subtitles"
-            if grep -q "{\\\\an5}" output/subtitles.srt; then
-              echo "✅ Center alignment marker found"
-            else
-              echo "❌ Center alignment marker missing"
-              exit 1
-            fi
+          if [ -f "output/subtitles.ass" ]; then
+            echo "✅ ASS subtitle file found (animations + color enabled)"
+            LINE_COUNT=$(wc -l < output/subtitles.ass)
+            echo "   Lines: $LINE_COUNT"
+          elif [ -f "output/subtitles.srt" ]; then
+            echo "⚠️ Only SRT found (no animations) - continuing"
           else
-            echo "❌ Subtitle file not found"
+            echo "❌ No subtitle file found"
             exit 1
           fi
 
@@ -259,7 +256,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: subtitles-${{ env.RUN_ID }}
-          path: output/subtitles.srt
+          path: |
+            output/subtitles.ass
+            output/subtitles.srt
           retention-days: 1
 
       - name: Notify Tier 1
@@ -442,6 +441,7 @@ jobs:
             echo "✅ Assets and manifest copied"
           fi
           if [ -d "output/subtitles-${{ env.RUN_ID }}" ]; then
+            cp output/subtitles-${{ env.RUN_ID }}/subtitles.ass output/ 2>/dev/null || true
             cp output/subtitles-${{ env.RUN_ID }}/subtitles.srt output/ 2>/dev/null || true
             echo "✅ Subtitles copied"
           fi
@@ -470,7 +470,7 @@ jobs:
             --type short \
             --script-file output/script.json \
             --clips-dir output/clips/ \
-            --subtitles-file output/subtitles.srt \
+            --subtitles-file output/subtitles.ass \
             --run-id "$RUN_ID" \
             --hook-file output/hook.json \
             --cta-file output/cta.json \
@@ -543,6 +543,7 @@ jobs:
             cp output/script-${{ env.RUN_ID }}/script.json output/upload/ 2>/dev/null || echo "⚠️ Script not found"
           fi
           if [ -d "output/subtitles-${{ env.RUN_ID }}" ]; then
+            cp output/subtitles-${{ env.RUN_ID }}/subtitles.ass output/upload/ 2>/dev/null || true
             cp output/subtitles-${{ env.RUN_ID }}/subtitles.srt output/upload/ 2>/dev/null || true
           fi
           echo "📁 Files ready for upload:"
