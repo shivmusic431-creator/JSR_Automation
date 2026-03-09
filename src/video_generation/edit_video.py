@@ -78,39 +78,52 @@ def find_latest_audio_file(output_dir="output"):
 
 
 def format_subtitle_style(video_type: str = "long") -> str:
-    """
-    YouTube Shorts style animated captions - Bold, colorful, center-screen.
-    """
+    """Fallback SRT style — used only if ASS file not available."""
     if video_type == "short":
-        # YouTube Shorts style: Bold yellow text, clean outline only, NO background
         return (
             "FontName=Noto Sans Devanagari,"
-            "FontSize=32,"
+            "FontSize=20,"
             "Bold=1,"
             "PrimaryColour=&H00FFFF00,"
             "OutlineColour=&H00000000,"
             "BorderStyle=1,"
-            "Outline=3,"
+            "Outline=4,"
             "Shadow=0,"
-            "Alignment=10,"
-            "MarginV=200,"
-            "MarginL=60,"
-            "MarginR=60"
+            "Alignment=8,"
+            "MarginV=1056,"
+            "MarginL=40,"
+            "MarginR=40"
         )
     else:
-        # Long video: clean white bottom captions
         return (
             "FontName=Noto Sans Devanagari,"
-            "FontSize=32,"
+            "FontSize=20,"
             "Bold=1,"
             "PrimaryColour=&H00FFFFFF,"
             "OutlineColour=&H00000000,"
             "BorderStyle=1,"
-            "Outline=2,"
+            "Outline=3,"
             "Shadow=0,"
             "Alignment=2,"
-            "MarginV=50"
+            "MarginV=60"
         )
+
+
+def get_subtitle_filter(subtitles_file: str, video_type: str = "short") -> str:
+    """
+    Return correct FFmpeg subtitle filter.
+    - ASS file  -> use ass= filter (animations, colors, positioning all from file)
+    - SRT file  -> use subtitles= with force_style fallback
+    """
+    p = Path(subtitles_file)
+    if p.suffix.lower() == ".ass":
+        # Escape colons in path for ffmpeg filter
+        escaped = str(p).replace("\\", "/").replace(":", "\\:")
+        return f"ass={escaped}"
+    else:
+        style = format_subtitle_style(video_type)
+        escaped = str(p).replace("\\", "/").replace(":", "\\:")
+        return f"subtitles={escaped}:force_style=\'{style}\'"
 
 def verify_subtitle_center_alignment(subtitles_file: Path) -> bool:
     """Verify subtitle file contains center alignment marker"""
@@ -287,12 +300,11 @@ def edit_video(video_type: str, script_file: str, audio_file: str, clips_dir: st
         # SECOND: PROFESSIONAL SUBTITLES with NO black background
         if subtitles_file and Path(subtitles_file).exists():
             # Verify center alignment
-            verify_subtitle_center_alignment(Path(subtitles_file))
-            
-            # PROFESSIONAL STYLE: BorderStyle=1 for outline only (NO background box)
-            subtitle_style = format_subtitle_style(video_type)
-            video_filters.append(f"subtitles={subtitles_file}:force_style='{subtitle_style}'")
-            log("📝 Adding PROFESSIONAL subtitles with NO black background")
+            # Use ASS filter if .ass file exists, else fallback to SRT
+            ass_path = Path(subtitles_file).parent / "subtitles.ass"
+            active_sub = str(ass_path) if ass_path.exists() else subtitles_file
+            video_filters.append(get_subtitle_filter(active_sub, video_type))
+            log(f"📝 Adding subtitles: {Path(active_sub).suffix.upper()} format")
         
         # THIRD: Hook overlay (first 3 seconds)
         if video_type == 'short' and hook_file and Path(hook_file).exists():
@@ -428,12 +440,11 @@ def edit_video(video_type: str, script_file: str, audio_file: str, clips_dir: st
         # SECOND: PROFESSIONAL SUBTITLES with NO black background
         if subtitles_file and Path(subtitles_file).exists():
             # Verify center alignment
-            verify_subtitle_center_alignment(Path(subtitles_file))
-            
-            # PROFESSIONAL STYLE: BorderStyle=1 for outline only (NO background box)
-            subtitle_style = format_subtitle_style(video_type)
-            video_filters.append(f"subtitles={subtitles_file}:force_style='{subtitle_style}'")
-            log("📝 Adding PROFESSIONAL subtitles with NO black background")
+            # Use ASS filter if .ass file exists, else fallback to SRT
+            ass_path = Path(subtitles_file).parent / "subtitles.ass"
+            active_sub = str(ass_path) if ass_path.exists() else subtitles_file
+            video_filters.append(get_subtitle_filter(active_sub, video_type))
+            log(f"📝 Adding subtitles: {Path(active_sub).suffix.upper()} format")
         
         # THIRD: Hook overlay (first 3 seconds)
         if video_type == 'short' and hook_file and Path(hook_file).exists():
