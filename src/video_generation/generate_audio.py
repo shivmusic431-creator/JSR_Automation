@@ -938,7 +938,7 @@ class XTTSAudioGenerator:
                         speaker_wav=VOICE_CLONE_FILE,
                         language=self.language,
                         file_path=str(temp_file),
-                        speed=1.15,          # Slightly faster = more confident, energetic
+                        speed=1.25,          # Faster = more confident, energetic
                         temperature=0.75,    # Higher = more expressive, less monotone
                         repetition_penalty=10.0,  # Prevents flat/repetitive tone
                     )
@@ -958,7 +958,7 @@ class XTTSAudioGenerator:
                             text=segment,
                             speaker_wav=VOICE_CLONE_FILE,
                             language=self.language,
-                            speed=1.15,
+                            speed=1.25,
                             temperature=0.75,
                             repetition_penalty=10.0,
                         )
@@ -1008,7 +1008,7 @@ class XTTSAudioGenerator:
 
             # Apply speed boost for confident narration (1.08x subtle increase)
             log("⚡ Applying confidence speed boost (1.08x)...")
-            final_audio = increase_audio_speed(final_audio, speed=1.08)
+            final_audio = increase_audio_speed(final_audio, speed=1.12)
 
             # Final smoothing pass
             final_audio = smooth_audio(final_audio)

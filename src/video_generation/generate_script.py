@@ -151,56 +151,48 @@ def create_shorts_script_prompt(category, sub_category, episode, title):
     hindi_category = CATEGORIES_CONFIG.get(category, {}).get("hindi_name", category)
     hindi_sub = CATEGORIES_CONFIG.get(category, {}).get("sub_categories", {}).get(sub_category, sub_category)
 
-    return f"""You are an elite Hindi YouTube Shorts scriptwriter. Generate a COMPLETE short-form video package for a 55-58 second video.
+    return f"""You are writing a 58-second YouTube Shorts script in Hindi. This is NOT a long video. Do NOT write hook/problem_agitation/promise/main_content/conclusion structure. That structure is FORBIDDEN here.
 
 CRITICAL JSON RULE: All string values must use ONLY double quotes. Never use single quotes inside JSON string values.
 
-INPUT:
-- Category: {category} ({hindi_category})
-- Sub-Category: {sub_category} ({hindi_sub})
-- Episode: {episode}
-- Title hint: {title}
-- Duration: 55-58 seconds MAXIMUM (170-200 Hindi words TOTAL in narration)
-- Audience: 18-35 years, Hindi-speaking Indians
-- Language: PURE HINDI DEVANAGARI ONLY in all narration fields
+TOPIC: {title}
+Category: {category} - {sub_category}
+Language: PURE HINDI DEVANAGARI ONLY in narration. No Roman/English words in narration.
+Total words: 170-195 words across ALL narration fields combined.
 
-SHORTS SCRIPT RULES (MOST IMPORTANT):
-1. NO TEASING - Do NOT say "janane ke liye dekhte raho" or "aage bataunga" or "video mein bataya hai"
-2. DELIVER COMPLETE VALUE in 58 seconds - viewer must feel satisfied after watching
-3. Hook must STATE the value immediately, not promise it later
-4. Main content must be DIRECT facts/tips/insights - no filler
-5. Every sentence must add value
-6. Total narration: 170-200 words ONLY (this is for 58 seconds of speech)
+MANDATORY OUTPUT FORMAT - use EXACTLY these JSON keys, nothing else:
+- "hook_line": string — 1 sentence, 15-20 words. DIRECTLY state what the viewer will learn RIGHT NOW. No "dekhte raho", no "aage bataunga", no teasing.
+- "main_points": array of 3 objects, each with "point_number"(int), "title"(string), "narration"(string 35-45 words). Each narration must give a COMPLETE, STANDALONE insight or fact. No filler. No "jaise ki", no padding.
+- "cta_line": string — 1 sentence, 10-15 words. Ask to follow/like.
 
-SHORTS STRUCTURE (total 170-200 words):
-- hook_line: 1-2 sentences, 15-20 words - GRAB attention AND state the topic directly
-- main_points: 3-4 powerful points, 120-140 words total - DELIVER the actual value here
-- cta_line: 1 sentence, 15-20 words - follow/like call to action
+BANNED PHRASES in narration (NEVER use these):
+- "poori video dekho" / "video dekhte raho"
+- "aage bataunga" / "age janenge"
+- "aaj hum baat karenge" / "is video mein"
+- "bahut important hai yeh jaanna" (without actually saying what it is)
+- Any sentence that promises future information instead of giving current information
 
-EXAMPLE OF WRONG hook: "Kya aap jaante ho ki ek secret hai jo aapki life badal sakta hai? Poori video dekho."
-EXAMPLE OF CORRECT hook: "Gaslighting ek manipulation technique hai jisme log tumhari reality ko hi twist kar dete hain - aaj 3 signs bataunga."
+GOOD EXAMPLE for hook_line on topic "Gaslighting":
+"Gaslighting mein log tumhari memories aur feelings ko galat sabit karke tumhe confuse karte hain — yeh 3 signs pehchano."
 
-Return ONLY raw JSON. No markdown. No text outside JSON.
+BAD EXAMPLE for hook_line:
+"Kya aap jaante hain ek aisi technique ke baare mein jo aapki life badal sakti hai? Dekhte raho."
+
+Return ONLY raw JSON. No markdown. No explanation outside JSON.
 
 {{
   "metadata": {{
-    "final_title": "title string under 60 chars with #Shorts",
-    "title_options": [
-      {{"title": "option 1", "character_count": 55, "why_it_works": "reason"}},
-      {{"title": "option 2", "character_count": 58, "why_it_works": "reason"}},
-      {{"title": "option 3", "character_count": 52, "why_it_works": "reason"}}
-    ],
-    "description": "SEO description for shorts",
-    "seo_keywords": ["keyword1", "keyword2"],
-    "hashtags": ["#tag1", "#tag2", "#Shorts"],
-    "tags": ["tag1", "tag2", "tag3"],
+    "final_title": "catchy Hindi title under 60 chars, add #Shorts at end",
+    "description": "SEO description 100-150 words",
+    "seo_keywords": ["keyword1", "keyword2", "keyword3"],
+    "hashtags": ["#Shorts", "#tag2", "#tag3"],
+    "tags": ["tag1", "tag2", "tag3", "tag4", "tag5"],
     "thumbnail_concept": {{
-      "main_subject": "person description",
-      "facial_expression": "shocked or curious expression",
+      "main_subject": "person or visual description",
+      "facial_expression": "shocked or intense expression",
       "background": "dark dramatic",
-      "text_overlay": "3-4 words max",
-      "color_scheme": ["red", "yellow", "black"],
-      "lighting": "dramatic cinematic"
+      "text_overlay": "3-4 Hindi words",
+      "color_scheme": ["red", "yellow", "black"]
     }},
     "category": "{category}",
     "sub_category": "{sub_category}",
@@ -208,15 +200,15 @@ Return ONLY raw JSON. No markdown. No text outside JSON.
     "video_type": "short"
   }},
   "script": {{
-    "hook_line": "1-2 sentence hook in pure Hindi that grabs AND delivers topic directly",
+    "hook_line": "DIRECT hook in pure Hindi Devanagari - states topic + value immediately",
     "main_points": [
-      {{"point_number": 1, "title": "point name", "narration": "direct value in pure Hindi, 30-35 words"}},
-      {{"point_number": 2, "title": "point name", "narration": "direct value in pure Hindi, 30-35 words"}},
-      {{"point_number": 3, "title": "point name", "narration": "direct value in pure Hindi, 30-35 words"}}
+      {{"point_number": 1, "title": "point name in Hindi", "narration": "35-45 word complete insight in pure Hindi Devanagari"}},
+      {{"point_number": 2, "title": "point name in Hindi", "narration": "35-45 word complete insight in pure Hindi Devanagari"}},
+      {{"point_number": 3, "title": "point name in Hindi", "narration": "35-45 word complete insight in pure Hindi Devanagari"}}
     ],
-    "cta_line": "follow/like CTA in pure Hindi, 15-20 words",
+    "cta_line": "follow/like CTA in pure Hindi Devanagari",
     "word_count": 185,
-    "estimated_duration": "0:58"
+    "estimated_duration": "0:57"
   }}
 }}"""
 
@@ -596,6 +588,28 @@ def generate_script(category, sub_category, episode, run_id, video_type='short')
 
     if 'script' not in script_data:
         raise ValueError("Response JSON missing 'script' field")
+
+    # STRICT VALIDATION for shorts: reject if Gemini returned long-form format
+    if video_type == 'short':
+        script = script_data['script']
+        if 'hook_line' not in script:
+            print("⚠️ Gemini returned long-form format for shorts request — retrying with stricter prompt...")
+            # Force retry with even more explicit prompt
+            stricter_prompt = (
+                "CRITICAL: Return ONLY a JSON with these EXACT keys in 'script': "
+                "'hook_line' (string), 'main_points' (array), 'cta_line' (string). "
+                "Do NOT use hook/problem_agitation/promise/main_content/conclusion keys. "
+                "Topic: " + title + " in Hindi. \n\n" +
+                create_shorts_script_prompt(category, sub_category, episode, title)
+            )
+            response_text2, model_used = call_gemini_with_retry(stricter_prompt)
+            script_data = extract_json_robust(response_text2)
+            if 'script' not in script_data or 'hook_line' not in script_data.get('script', {}):
+                raise ValueError(
+                    "Gemini repeatedly returned wrong format for shorts. "
+                    "Expected 'hook_line' key in script but got: " +
+                    str(list(script_data.get('script', {}).keys()))
+                )
 
     # Build full_text in code (avoids JSON escape issues with Hindi text)
     script_data['script']['full_text'] = build_full_text(script_data['script'])

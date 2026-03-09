@@ -82,22 +82,20 @@ def format_subtitle_style(video_type: str = "long") -> str:
     YouTube Shorts style animated captions - Bold, colorful, center-screen.
     """
     if video_type == "short":
-        # YouTube Shorts style: Bold large yellow text, thick black outline, center screen
+        # YouTube Shorts style: Bold yellow text, clean outline only, NO background
         return (
             "FontName=Noto Sans Devanagari,"
-            "FontSize=62,"
+            "FontSize=32,"
             "Bold=1,"
             "PrimaryColour=&H00FFFF00,"
             "OutlineColour=&H00000000,"
-            "BackColour=&H55000000,"
-            "BorderStyle=3,"
-            "Outline=4,"
-            "Shadow=1,"
+            "BorderStyle=1,"
+            "Outline=3,"
+            "Shadow=0,"
             "Alignment=10,"
-            "MarginV=0,"
+            "MarginV=200,"
             "MarginL=60,"
-            "MarginR=60,"
-            "Spacing=1"
+            "MarginR=60"
         )
     else:
         # Long video: clean white bottom captions
