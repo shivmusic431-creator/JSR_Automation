@@ -114,16 +114,15 @@ def get_subtitle_filter(subtitles_file: str, video_type: str = "short") -> str:
     Return correct FFmpeg subtitle filter.
     - ASS file  -> use ass= filter (animations, colors, positioning all from file)
     - SRT file  -> use subtitles= with force_style fallback
+    Note: on Linux paths never contain colons so no escaping needed.
     """
     p = Path(subtitles_file)
+    path_str = str(p.resolve())
     if p.suffix.lower() == ".ass":
-        # Escape colons in path for ffmpeg filter
-        escaped = str(p).replace("\\", "/").replace(":", "\\:")
-        return f"ass={escaped}"
+        return f"ass={path_str}"
     else:
         style = format_subtitle_style(video_type)
-        escaped = str(p).replace("\\", "/").replace(":", "\\:")
-        return f"subtitles={escaped}:force_style=\'{style}\'"
+        return f"subtitles={path_str}:force_style='{style}'"
 
 def verify_subtitle_center_alignment(subtitles_file: Path) -> bool:
     """Verify subtitle file contains center alignment marker"""
