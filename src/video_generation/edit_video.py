@@ -82,7 +82,7 @@ def format_subtitle_style(video_type: str = "long") -> str:
     if video_type == "short":
         return (
             "FontName=Noto Sans Devanagari,"
-            "FontSize=20,"
+            "FontSize=42,"
             "Bold=1,"
             "PrimaryColour=&H00FFFF00,"
             "OutlineColour=&H00000000,"
@@ -97,7 +97,7 @@ def format_subtitle_style(video_type: str = "long") -> str:
     else:
         return (
             "FontName=Noto Sans Devanagari,"
-            "FontSize=20,"
+            "FontSize=42,"
             "Bold=1,"
             "PrimaryColour=&H00FFFFFF,"
             "OutlineColour=&H00000000,"
@@ -272,11 +272,14 @@ def edit_video(video_type: str, script_file: str, audio_file: str, clips_dir: st
             'ffmpeg', '-y',
             '-f', 'lavfi', '-i', f'color=c=black:s=1920x1080:d={audio_duration}',
             '-i', audio_file,
+            '-map', '0:v:0',
+            '-map', '1:a:0',
             '-shortest',
             '-c:v', 'libx264', '-preset', 'medium',
             '-c:a', 'aac', '-b:a', '192k',
             '-pix_fmt', 'yuv420p',
-            '-r', '30'
+            '-r', '30',
+            '-vsync', 'cfr'
         ]
         
         # Add video filters
@@ -290,6 +293,8 @@ def edit_video(video_type: str, script_file: str, audio_file: str, clips_dir: st
         if video_type == 'short':
             # Proper vertical scaling with padding
             video_filters.append(
+                "fps=30,"
+                "setpts=PTS-STARTPTS,"
                 "scale=1080:1920:force_original_aspect_ratio=decrease,"
                 "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,"
                 "format=yuv420p"
@@ -408,15 +413,19 @@ def edit_video(video_type: str, script_file: str, audio_file: str, clips_dir: st
         log(f"📋 Total video duration with loops: {(loop_count * total_clips_duration):.2f}s (covers {target_duration:.2f}s audio)")
         
         # Base FFmpeg command
+        # vsync=cfr + r=30 ensures smooth frame rate across all clip transitions (no freeze)
         cmd = [
             'ffmpeg', '-y',
             '-f', 'concat', '-safe', '0', '-i', str(concat_file),
             '-i', audio_file,
+            '-map', '0:v:0',
+            '-map', '1:a:0',
             '-c:v', 'libx264', '-preset', 'medium',
             '-c:a', 'aac', '-b:a', '192k',
             '-shortest',
             '-pix_fmt', 'yuv420p',
-            '-r', '30'
+            '-r', '30',
+            '-vsync', 'cfr'
         ]
         
         # Add video filters
@@ -430,6 +439,8 @@ def edit_video(video_type: str, script_file: str, audio_file: str, clips_dir: st
         if video_type == 'short':
             # Proper vertical scaling with padding
             video_filters.append(
+                "fps=30,"
+                "setpts=PTS-STARTPTS,"
                 "scale=1080:1920:force_original_aspect_ratio=decrease,"
                 "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,"
                 "format=yuv420p"
