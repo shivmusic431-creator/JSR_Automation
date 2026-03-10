@@ -42,6 +42,10 @@ env:
   TIER1_WEBHOOK_URL: ${{ secrets.TIER1_WEBHOOK_URL }}
   TIER1_HEALTH_URL: ${{ secrets.TIER1_HEALTH_URL }}
 
+permissions:
+  contents: read
+  actions: write   # Required for delete-artifact
+
 jobs:
 
   # ============================================================
