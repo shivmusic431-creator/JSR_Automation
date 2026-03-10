@@ -432,27 +432,51 @@ jobs:
 
       - name: Organize Files
         run: |
-          mkdir -p output/final
-          if [ -d "output/script-${{ env.RUN_ID }}" ]; then
-            cp output/script-${{ env.RUN_ID }}/script.json output/ 2>/dev/null || true
+          mkdir -p output/final output/clips
+
+          echo "📁 Downloaded artifact structure:"
+          find output/ -maxdepth 3 -type f | sort
+
+          # Script — try direct file and subfolder
+          if [ -f "output/script-${{ env.RUN_ID }}/script.json" ]; then
+            cp output/script-${{ env.RUN_ID }}/script.json output/
+            echo "✅ script.json copied"
+          elif [ -f "output/script.json" ]; then
+            echo "✅ script.json already in output/"
+          else
+            echo "❌ script.json not found — cannot continue"
+            exit 1
           fi
+
+          # Audio
           if [ -d "output/audio-${{ env.RUN_ID }}" ]; then
             cp output/audio-${{ env.RUN_ID }}/*.wav output/ 2>/dev/null || true
             echo "✅ Audio files copied"
+          else
+            echo "⚠️ Audio artifact dir not found"
           fi
+
+          # Assets / clips
           if [ -d "output/assets-${{ env.RUN_ID }}" ]; then
-            mkdir -p output/clips/
-            cp output/assets-${{ env.RUN_ID }}/* output/clips/ 2>/dev/null || true
+            cp output/assets-${{ env.RUN_ID }}/*.mp4 output/clips/ 2>/dev/null || true
             cp output/assets-${{ env.RUN_ID }}/manifest.json output/clips/ 2>/dev/null || true
-            echo "✅ Assets and manifest copied"
+            echo "✅ Assets copied"
+          else
+            echo "⚠️ Assets artifact dir not found"
           fi
+
+          # Subtitles
           if [ -d "output/subtitles-${{ env.RUN_ID }}" ]; then
             cp output/subtitles-${{ env.RUN_ID }}/subtitles.ass output/ 2>/dev/null || true
             cp output/subtitles-${{ env.RUN_ID }}/subtitles.srt output/ 2>/dev/null || true
             echo "✅ Subtitles copied"
+          else
+            echo "⚠️ Subtitles artifact dir not found"
           fi
-          echo "📁 Files organized:"
+
+          echo "📁 Final output/ structure:"
           ls -la output/
+          ls -la output/clips/ 2>/dev/null || true
 
       - name: Generate Viral Hook
         env:
