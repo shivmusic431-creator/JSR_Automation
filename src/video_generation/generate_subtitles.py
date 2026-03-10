@@ -136,8 +136,8 @@ def write_ass(subtitles: List[Dict], path: Path, video_type: str = "short") -> b
             "BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding\n"
             # FontSize=20, Bold, Yellow default, Black outline size 4, NO background (BorderStyle=1)
             # Alignment=8 = top-center (we override position with pos_y via MarginV)
-            f"Style: Default,Noto Sans Devanagari,20,&H00FFFF00,&H000000FF,&H00000000,"
-            f"&H00000000,1,0,0,0,100,100,0,0,1,4,0,8,40,40,{pos_y},1\n\n"
+            f"Style: Default,Noto Sans Devanagari Bold,84,&H00FFFF00,&H000000FF,&H00000000,"
+            f"&H00000000,1,0,0,0,100,100,0,0,1,5,0,8,40,40,{pos_y},1\n\n"
             "[Events]\n"
             "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n"
         )
