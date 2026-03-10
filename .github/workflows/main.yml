@@ -476,7 +476,7 @@ jobs:
             --type short \
             --script-file output/script.json \
             --clips-dir output/clips/ \
-            --subtitles-file output/subtitles.ass \
+            --subtitles-file output/subtitles.srt \
             --run-id "$RUN_ID" \
             --hook-file output/hook.json \
             --cta-file output/cta.json \
