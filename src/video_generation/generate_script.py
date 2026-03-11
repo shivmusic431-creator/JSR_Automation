@@ -161,54 +161,29 @@ Category: {category} - {sub_category}
 Total words: 170-195 words across ALL narration fields combined.
 
 LANGUAGE RULES — THIS IS THE MOST IMPORTANT SECTION:
-Write exactly like a smart Indian friend talks in real life — natural, conversational Urban Hindi.
 
-SPEAKING STYLE: Hinglish (Hindi + English mixed naturally)
-WRITING STYLE: Pure Devanagari script — NO Roman/English letters in narration AT ALL
+TARGET: बोलना वैसे जैसे असली इंडियन बोलते हैं — न ज़्यादा English, न Sanskrit Hindi।
 
-This means English words that Indians commonly use must be written in Devanagari phonetics:
-- "manipulation" → "मैनीपुलेशन"
-- "toxic" → "टॉक्सिक"
-- "mindset" → "माइंडसेट"
-- "basically" → "बेसिकली"
-- "confidence" → "कॉन्फिडेंस"
-- "feelings" → "फीलिंग्स"
-- "behavior" → "बिहेवियर"
-- "relationship" → "रिलेशनशिप"
-- "trigger" → "ट्रिगर"
-- "control" → "कंट्रोल"
-- "reality" → "रियलिटी"
-- "pattern" → "पैटर्न"
-- "actually" → "एक्चुअली"
-- "seriously" → "सीरियसली"
-- "obviously" → "ऑब्वियसली"
-- "mental" → "मेंटल"
-- "emotional" → "इमोशनल"
-- "trust" → "ट्रस्ट"
-- "respect" → "रिस्पेक्ट"
-- "situation" → "सिचुएशन"
-- "reaction" → "रिएक्शन"
-- "experience" → "एक्सपीरियंस"
-- "next move" → "नेक्स्ट मूव"
-- "start" → "स्टार्ट"
-- "result" → "रिज़ल्ट"
-- "point" → "पॉइंट"
+RATIO RULE: हर sentence में कम से कम 70% शब्द pure Hindi हों। English words सिर्फ वहाँ जहाँ Indian naturally बोलते हैं।
 
-STRICTLY BANNED — heavy Sanskrit/bookish words that Indians never say in conversation:
-- "प्रभावशाली" → "पावरफुल" लिखो
-- "मनोवैज्ञानिक" → "साइकोलॉजी वाला" लिखो
-- "प्रतिक्रिया" → "रिएक्शन" लिखो
-- "परिणाम" → "रिज़ल्ट" लिखो
-- "विशेषता" → "क्वालिटी" लिखो
-- "तथा" / "एवं" → "और" लिखो
-- "किंतु" / "परंतु" → "लेकिन" लिखो
-- "अतः" → "तो" लिखो
+WRITING RULE: सब Devanagari में — Roman/English letters नहीं।
 
-GOOD EXAMPLE (natural Indian speech, pure Devanagari):
-"गैसलाइटिंग एक मैनीपुलेशन टैक्टिक है जिसमें कोई तुम्हारी मेमोरीज़ और फीलिंग्स को गलत साबित करता है — तुम्हें लगता है तुम ही क्रेज़ी हो। ये 3 साइन्स पहचानो।"
+कौन से English words natural हैं Indian speech में (Devanagari में लिखो):
+- Topic-specific जिनका Hindi नहीं होता: "मैनीपुलेशन", "गैसलाइटिंग", "टॉक्सिक", "साइकोलॉजी"
+- बहुत कम casual connectors: "एक्चुअली", "बेसिकली" — बस 1-2 per narration
 
-BAD EXAMPLE (Shuddh Hindi — FORBIDDEN):
-"गैसलाइटिंग एक मनोवैज्ञानिक प्रक्रिया है जिसमें व्यक्ति आपकी स्मृतियों एवं भावनाओं को असत्य प्रमाणित करता है।"
+NATURAL INDIAN SENTENCES (ऐसे लिखो):
+✓ "हमने खेलना स्टार्ट किया" — "स्टार्ट" natural है
+✓ "यार मेरा मूड ऑफ है" — real और casual
+✓ "मेरी मैथ कमजोर है" — Indians ऐसे बोलते हैं
+✓ "एक बार यहाँ विजिट करो" — common है
+✓ "देखो, रावण बहुत ज्ञानी था लेकिन उसका अहंकार उसके विनाश का कारण बना।" — mostly Hindi, natural
+
+AVOID — बहुत ज़्यादा English:
+✗ "यह बिहेवियर पैटर्न एक्चुअली बेसिकली टॉक्सिक ट्रिगर है" — overdone
+✗ Heavy Sanskrit: "मनोवैज्ञानिक", "प्रतिक्रिया", "एवं", "अतः", "किंतु" — bookish
+
+SIMPLE TEST: क्या एक 22 साल का दिल्ली का लड़का दोस्त से ऐसे बोलेगा? हाँ → लिखो। नहीं → बदलो।
 
 MANDATORY OUTPUT FORMAT - use EXACTLY these JSON keys, nothing else:
 - "hook_line": string — 1 sentence, 15-20 words. DIRECTLY state what the viewer will learn RIGHT NOW. No "dekhte raho", no "aage bataunga", no teasing. Write in natural Hinglish.
@@ -275,60 +250,32 @@ INPUT:
 - Duration: 10-15 minutes (1400-1900 words total across all script sections)
 - Audience: 18-35 years, urban Indians who watch YouTube daily
 
-LANGUAGE RULES — THIS IS THE MOST CRITICAL SECTION. READ CAREFULLY.
+LANGUAGE RULES — THIS IS THE MOST CRITICAL SECTION.
 
-SPEAKING STYLE: Conversational Urban Hindi — exactly like a smart Indian friend talks.
-WRITING STYLE: Pure Devanagari script — NO Roman/English letters in narration AT ALL.
+TARGET: बोलना वैसे जैसे असली इंडियन बोलते हैं — न ज़्यादा English, न Sanskrit Hindi।
 
-This means English words that Indians commonly use must be written in Devanagari phonetics:
-- "manipulation" → "मैनीपुलेशन"
-- "toxic" → "टॉक्सिक"
-- "mindset" → "माइंडसेट"
-- "basically" → "बेसिकली"
-- "confidence" → "कॉन्फिडेंस"
-- "feelings" → "फीलिंग्स"
-- "behavior" → "बिहेवियर"
-- "relationship" → "रिलेशनशिप"
-- "trigger" → "ट्रिगर"
-- "control" → "कंट्रोल"
-- "reality" → "रियलिटी"
-- "pattern" → "पैटर्न"
-- "actually" → "एक्चुअली"
-- "seriously" → "सीरियसली"
-- "mental" → "मेंटल"
-- "emotional" → "इमोशनल"
-- "trust" → "ट्रस्ट"
-- "respect" → "रिस्पेक्ट"
-- "situation" → "सिचुएशन"
-- "reaction" → "रिएक्शन"
-- "experience" → "एक्सपीरियंस"
-- "result" → "रिज़ल्ट"
-- "point" → "पॉइंट"
-- "next" → "नेक्स्ट"
-- "start" → "स्टार्ट"
-- "psychology" → "साइकोलॉजी"
+RATIO RULE: हर sentence में कम से कम 70% शब्द pure Hindi हों।
 
-STRICTLY BANNED — heavy Sanskrit/bookish words Indians never say:
-- "प्रभावशाली" → "पावरफुल" लिखो
-- "मनोवैज्ञानिक" → "साइकोलॉजिकल" लिखो
-- "प्रतिक्रिया" → "रिएक्शन" लिखो
-- "परिणाम" → "रिज़ल्ट" लिखो
-- "विशेषता" → "क्वालिटी" लिखो
-- "सम्बन्ध" / "संबंध" → "रिलेशनशिप" लिखो
-- "अनुभव" → "एक्सपीरियंस" लिखो
-- "तथा" / "एवं" → "और" लिखो
-- "किंतु" / "परंतु" → "लेकिन" लिखो
-- "अतः" → "तो" लिखो
-- "उपरोक्त" → हटा दो
-- Any word a 60-year-old professor would use → REPLACE IT
+WRITING RULE: सब Devanagari में — Roman/English letters नहीं।
 
-TONE: एक smart बड़े भाई की तरह जो genuinely care करता है। Confident, direct, warm। "तुम" use करो "आप" नहीं।
+कौन से English words natural हैं (Devanagari में लिखो, ज़रूरत पर ही):
+- Topic-specific terms: "मैनीपुलेशन", "गैसलाइटिंग", "टॉक्सिक", "साइकोलॉजी", "माइंडसेट"
+- बहुत कम casual: "एक्चुअली", "बेसिकली" — पूरे narration में 2-3 से ज़्यादा नहीं
 
-GOOD EXAMPLE (natural, pure Devanagari):
-"देखो, गैसलाइटिंग एक मैनीपुलेशन टैक्टिक है। जब कोई बार-बार तुम्हारी फीलिंग्स को dismiss करे, बोले कि तुम ओवर-रिएक्ट कर रहे हो — एक्चुअली यही रेड फ्लैग है।"
+NATURAL INDIAN SENTENCES (ऐसे लिखो):
+✓ "हमने खेलना स्टार्ट किया है" — "स्टार्ट" natural है
+✓ "यार मेरा मूड ऑफ है, समझ नहीं आ रहा क्या करूँ"
+✓ "मेरी मैथ कमजोर थी, लेकिन मेहनत से सब ठीक हो गया"
+✓ "रावण बहुत ज्ञानी था, लेकिन उसका अहंकार उसके विनाश का कारण बना"
+✓ "देखो, जब कोई बार-बार तुम्हारी बात काटे — यही टॉक्सिक behaviour है"
 
-BAD EXAMPLE (Shuddh Hindi — FORBIDDEN):
-"गैसलाइटिंग एक मनोवैज्ञानिक प्रक्रिया है जिसमें व्यक्ति आपकी भावनाओं को असत्य प्रमाणित करता है।"
+AVOID — बहुत ज़्यादा English:
+✗ हर sentence में 4+ English words — overdone
+✗ Heavy Sanskrit: "मनोवैज्ञानिक", "प्रतिक्रिया", "एवं", "अतः", "किंतु", "उपरोक्त"
+
+TONE: एक smart बड़े भाई की तरह। Confident, warm, direct। "तुम" use करो "आप" नहीं।
+
+SIMPLE TEST: क्या एक 22 साल का दिल्ली का लड़का दोस्त से ऐसे बोलेगा? हाँ → लिखो। नहीं → बदलो।
 
 EMOTION INDICATORS (on separate line BEFORE narration, never spoken aloud):
 (धीरे से) (गंभीर स्वर में) (रहस्यमय स्वर में) (उत्साह से) (प्यार से)
