@@ -147,43 +147,55 @@ def create_shorts_script_prompt(category, sub_category, episode, title):
     Structure: Hook (5s) → Direct Value (40s) → CTA (10s)
     NO teasing, NO 'watch till end', NO promise-without-delivery.
     Full value delivered within 58 seconds.
+    Uses conversational Indian Hindi (Hinglish) — NOT literary/Shuddh Hindi.
     """
     hindi_category = CATEGORIES_CONFIG.get(category, {}).get("hindi_name", category)
     hindi_sub = CATEGORIES_CONFIG.get(category, {}).get("sub_categories", {}).get(sub_category, sub_category)
 
-    return f"""You are writing a 58-second YouTube Shorts script in Hindi. This is NOT a long video. Do NOT write hook/problem_agitation/promise/main_content/conclusion structure. That structure is FORBIDDEN here.
+    return f"""You are writing a 58-second YouTube Shorts script for Indian audience aged 18-35. This is NOT a long video. Do NOT write hook/problem_agitation/promise/main_content/conclusion structure. That structure is FORBIDDEN here.
 
 CRITICAL JSON RULE: All string values must use ONLY double quotes. Never use single quotes inside JSON string values.
 
 TOPIC: {title}
 Category: {category} - {sub_category}
-Language: PURE HINDI DEVANAGARI ONLY in narration. No Roman/English words in narration.
 Total words: 170-195 words across ALL narration fields combined.
 
+LANGUAGE RULES — THIS IS THE MOST IMPORTANT SECTION:
+Write exactly like a smart Indian friend talks in real life. This is called "Urban Hindi" or "Hinglish".
+
+ALLOWED (natural Indian speech):
+- Common English words mixed in: "manipulation", "toxic", "mindset", "actually", "basically", "anyway", "seriously", "feelings", "relationship", "control", "behavior", "trust", "respect", "confidence", "trigger", "pattern", "reality", "mental", "emotional", "normal", "obvious", "directly"
+- Hindi sentence structure with English nouns/adjectives naturally mixed
+- Everyday words Indians actually use: "log", "baat", "karo", "dekho", "samjho", "suno", "yaar", "sach mein", "matlab", "waise"
+
+STRICTLY BANNED (sounds bookish/unnatural):
+- Heavy Sanskrit-origin words: "प्रभावशाली", "मनोवैज्ञानिक", "व्यवहार", "प्रतिक्रिया", "अनुभव", "परिणाम", "स्थिति", "विशेषता", "सम्बन्ध", "प्रेम"
+- Replace with: "impactful/powerful", "psychology", "behavior", "reaction", "experience", "result", "situation", "quality", "relationship", "love/pyaar"
+- Formal Hindi connectors: "तथा", "एवं", "किंतु", "परंतु", "अतः", "इसलिए" → use "aur", "but", "so", "kyunki"
+
+GOOD NARRATION EXAMPLE (Natural Indian speech):
+"Gaslighting ek manipulation tactic hai jisme koi tumhari memories aur feelings ko galat sabit karta hai — tumhe lagta hai tum hi crazy ho. Ye 3 signs pehchano aur apne aap ko protect karo."
+
+BAD NARRATION EXAMPLE (Shuddh Hindi — FORBIDDEN):
+"गैसलाइटिंग एक मनोवैज्ञानिक प्रक्रिया है जिसमें व्यक्ति आपकी स्मृतियों एवं भावनाओं को असत्य प्रमाणित करता है।"
+
 MANDATORY OUTPUT FORMAT - use EXACTLY these JSON keys, nothing else:
-- "hook_line": string — 1 sentence, 15-20 words. DIRECTLY state what the viewer will learn RIGHT NOW. No "dekhte raho", no "aage bataunga", no teasing.
-- "main_points": array of 3 objects, each with "point_number"(int), "title"(string), "narration"(string 35-45 words). Each narration must give a COMPLETE, STANDALONE insight or fact. No filler. No "jaise ki", no padding.
-- "cta_line": string — 1 sentence, 10-15 words. Ask to follow/like.
+- "hook_line": string — 1 sentence, 15-20 words. DIRECTLY state what the viewer will learn RIGHT NOW. No "dekhte raho", no "aage bataunga", no teasing. Write in natural Hinglish.
+- "main_points": array of 3 objects, each with "point_number"(int), "title"(string), "narration"(string 35-45 words). Each narration must give a COMPLETE, STANDALONE insight or fact. Natural Hinglish only. No filler.
+- "cta_line": string — 1 sentence, 10-15 words. Ask to follow/like. Casual and friendly tone.
 
 BANNED PHRASES in narration (NEVER use these):
 - "poori video dekho" / "video dekhte raho"
 - "aage bataunga" / "age janenge"
 - "aaj hum baat karenge" / "is video mein"
-- "bahut important hai yeh jaanna" (without actually saying what it is)
 - Any sentence that promises future information instead of giving current information
-
-GOOD EXAMPLE for hook_line on topic "Gaslighting":
-"Gaslighting mein log tumhari memories aur feelings ko galat sabit karke tumhe confuse karte hain — yeh 3 signs pehchano."
-
-BAD EXAMPLE for hook_line:
-"Kya aap jaante hain ek aisi technique ke baare mein jo aapki life badal sakti hai? Dekhte raho."
 
 Return ONLY raw JSON. No markdown. No explanation outside JSON.
 
 {{
   "metadata": {{
-    "final_title": "catchy Hindi title under 60 chars, add #Shorts at end",
-    "description": "SEO description 100-150 words",
+    "final_title": "catchy Hinglish title under 60 chars, add #Shorts at end",
+    "description": "SEO description 100-150 words in natural Hinglish",
     "seo_keywords": ["keyword1", "keyword2", "keyword3"],
     "hashtags": ["#Shorts", "#tag2", "#tag3"],
     "tags": ["tag1", "tag2", "tag3", "tag4", "tag5"],
@@ -200,66 +212,94 @@ Return ONLY raw JSON. No markdown. No explanation outside JSON.
     "video_type": "short"
   }},
   "script": {{
-    "hook_line": "DIRECT hook in pure Hindi Devanagari - states topic + value immediately",
+    "hook_line": "DIRECT hook in natural Hinglish - states topic + value immediately",
     "main_points": [
-      {{"point_number": 1, "title": "point name in Hindi", "narration": "35-45 word complete insight in pure Hindi Devanagari"}},
-      {{"point_number": 2, "title": "point name in Hindi", "narration": "35-45 word complete insight in pure Hindi Devanagari"}},
-      {{"point_number": 3, "title": "point name in Hindi", "narration": "35-45 word complete insight in pure Hindi Devanagari"}}
+      {{"point_number": 1, "title": "point name in Hinglish", "narration": "35-45 word complete insight in natural conversational Hinglish"}},
+      {{"point_number": 2, "title": "point name in Hinglish", "narration": "35-45 word complete insight in natural conversational Hinglish"}},
+      {{"point_number": 3, "title": "point name in Hinglish", "narration": "35-45 word complete insight in natural conversational Hinglish"}}
     ],
-    "cta_line": "follow/like CTA in pure Hindi Devanagari",
+    "cta_line": "casual friendly follow/like CTA in Hinglish",
     "word_count": 185,
     "estimated_duration": "0:57"
   }}
-}}"""
+}}}"""
 
 
 def create_script_prompt(category, sub_category, episode, title):
     hindi_category = CATEGORIES_CONFIG.get(category, {}).get("hindi_name", category)
     hindi_sub = CATEGORIES_CONFIG.get(category, {}).get("sub_categories", {}).get(sub_category, sub_category)
 
-    return f"""You are an elite Hindi content strategist. Generate a complete YouTube video package.
+    return f"""You are an elite Indian YouTube content strategist. Generate a complete YouTube video package that sounds like a real, smart Indian person talking — NOT a news anchor or textbook.
 
 CRITICAL JSON RULE: All string values must use ONLY double quotes. Never use single quotes (apostrophes) inside JSON string values. Replace any apostrophe with a space or remove it entirely. This is the most important rule.
 
 WRONG: "why_it_works": "यह शीर्षक 'एपिसोड' का उल्लेख करता है"
-CORRECT: "why_it_works": "यह शीर्षक एपिसोड का उल्लेख करता है"
+CORRECT: "why_it_works": "yeh title episode ka mention karta hai"
 
 INPUT:
 - Category: {category} ({hindi_category})
 - Sub-Category: {sub_category} ({hindi_sub})
 - Episode: {episode}
 - Title hint: {title}
-- Duration: 10-15 minutes (1400-1900 Hindi words total across all script sections)
-- Audience: 18-35 years, Hindi-speaking Indians
-- Language: PURE HINDI DEVANAGARI ONLY in all narration fields
+- Duration: 10-15 minutes (1400-1900 words total across all script sections)
+- Audience: 18-35 years, urban Indians who watch YouTube daily
 
-EMOTION INDICATORS (on separate line BEFORE narration, never inline):
-(धीरे से) (गंभीर स्वर में) (रहस्यमय स्वर में) (उत्साह से) (प्यार से)
+LANGUAGE RULES — THIS IS THE MOST CRITICAL SECTION. READ CAREFULLY.
+
+Write in CONVERSATIONAL INDIAN HINDI (Urban Hindi / Hinglish). This is the language Indians actually speak and think in. NOT literary Sanskrit-based Hindi.
+
+WHAT IS ALLOWED — Natural Indian speech mixes Hindi + English freely:
+- Psychology/social English terms: "manipulation", "toxic", "mindset", "behavior", "trigger", "pattern", "confidence", "relationship", "trust", "feelings", "mental health", "reality check", "basically", "actually", "obviously", "seriously", "anyway", "literally"
+- Everyday Hindi words: "log", "baat", "yaar", "sach mein", "matlab", "waise", "dekho", "samjho", "suno", "kal", "abhi", "kyunki", "toh", "phir", "lekin", "aur", "kuch", "bohot", "zyada", "thoda", "pata hai"
+- Numbers and examples should feel real: "90% log yahi karte hain", "3 saal mein realize hua"
+- Emotions should feel raw: "dil se bura lagta hai", "gussa aana normal hai"
+
+STRICTLY BANNED — These make script sound fake and bookish:
+Heavy Sanskrit words to AVOID → use these REPLACEMENTS instead:
+- "मनोवैज्ञानिक" → "psychology wala" or just "psychology"
+- "प्रभावशाली" → "powerful" or "impactful"  
+- "व्यवहार" → "behavior"
+- "प्रतिक्रिया" → "reaction"
+- "परिणाम" → "result"
+- "स्थिति" → "situation"
+- "विशेषता" → "quality" or "trait"
+- "सम्बन्ध" / "संबंध" → "relationship"
+- "अनुभव" → "experience"
+- "तथा" / "एवं" → "aur"
+- "किंतु" / "परंतु" → "lekin" or "but"
+- "अतः" / "इसलिए" → "toh" or "so"
+- "उपरोक्त" → just remove it
+- Any word a 60-year-old professor would use → REPLACE IT
+
+TONE: Like a smart older brother/friend who genuinely cares and knows things. Confident, direct, warm. Uses "tum" not "aap". Uses rhetorical questions naturally.
+
+EMOTION INDICATORS (on separate line BEFORE narration, never spoken aloud):
+(slowly) (serious tone) (mysterious) (excited) (warm/caring)
 
 SCENE MARKERS (on separate line, never spoken):
 [SCENE: nature_morning] [SCENE: office_tension] [SCENE: city_traffic]
 [SCENE: dark_alley] [SCENE: books_study] [SCENE: crowd_walking]
 
-SCRIPT SECTIONS (all narration in pure Hindi Devanagari):
-1. hook: 100-130 words
-2. problem_agitation: 200-280 words
-3. promise: 150-200 words
-4. main_content: 4-6 sections, 1000-1400 words total
-5. practical_tips: 5-7 tips, 300-400 words total
-6. conclusion: 200-250 words with CTA
+SCRIPT SECTIONS (all narration in conversational Hinglish):
+1. hook: 100-130 words — start with a shocking truth or bold statement
+2. problem_agitation: 200-280 words — make them feel seen and understood
+3. promise: 150-200 words — tell them exactly what they will get
+4. main_content: 4-6 sections, 1000-1400 words total — real insights with examples
+5. practical_tips: 5-7 tips, 300-400 words total — actionable, specific steps
+6. conclusion: 200-250 words with strong CTA
 
 Return ONLY raw JSON. No markdown. No text outside JSON. No single quotes inside string values.
 
 {{
   "metadata": {{
-    "final_title": "title string without apostrophes",
+    "final_title": "catchy Hinglish title without apostrophes",
     "title_options": [
       {{"title": "option 1", "character_count": 55, "why_it_works": "reason without apostrophes"}},
       {{"title": "option 2", "character_count": 60, "why_it_works": "reason without apostrophes"}},
       {{"title": "option 3", "character_count": 58, "why_it_works": "reason without apostrophes"}}
     ],
     "title_analysis": "analysis without apostrophes",
-    "description": "full SEO description",
+    "description": "full SEO description in Hinglish",
     "description_hook": "first 2 lines",
     "seo_keywords": ["keyword1", "keyword2"],
     "hashtags": ["#tag1", "#tag2"],
@@ -283,16 +323,16 @@ Return ONLY raw JSON. No markdown. No text outside JSON. No single quotes inside
     "episode": {episode}
   }},
   "script": {{
-    "hook": "hook narration in pure Hindi",
-    "problem_agitation": "problem narration in pure Hindi",
-    "promise": "promise narration in pure Hindi",
+    "hook": "hook narration in conversational Hinglish",
+    "problem_agitation": "problem narration in conversational Hinglish",
+    "promise": "promise narration in conversational Hinglish",
     "main_content": [
-      {{"section_title": "section name", "content": "section narration in pure Hindi"}}
+      {{"section_title": "section name", "content": "section narration in conversational Hinglish"}}
     ],
     "practical_tips": [
-      {{"tip_number": 1, "tip_title": "tip name", "explanation": "tip explanation in pure Hindi"}}
+      {{"tip_number": 1, "tip_title": "tip name", "explanation": "tip explanation in conversational Hinglish"}}
     ],
-    "conclusion": "conclusion narration in pure Hindi",
+    "conclusion": "conclusion narration in conversational Hinglish",
     "word_count": 1600,
     "estimated_duration": "12:30"
   }}
