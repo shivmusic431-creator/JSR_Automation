@@ -161,22 +161,53 @@ Category: {category} - {sub_category}
 Total words: 170-195 words across ALL narration fields combined.
 
 LANGUAGE RULES — THIS IS THE MOST IMPORTANT SECTION:
-Write exactly like a smart Indian friend talks in real life. This is called "Urban Hindi" or "Hinglish".
+Write exactly like a smart Indian friend talks in real life — natural, conversational Urban Hindi.
 
-ALLOWED (natural Indian speech):
-- Common English words mixed in: "manipulation", "toxic", "mindset", "actually", "basically", "anyway", "seriously", "feelings", "relationship", "control", "behavior", "trust", "respect", "confidence", "trigger", "pattern", "reality", "mental", "emotional", "normal", "obvious", "directly"
-- Hindi sentence structure with English nouns/adjectives naturally mixed
-- Everyday words Indians actually use: "log", "baat", "karo", "dekho", "samjho", "suno", "yaar", "sach mein", "matlab", "waise"
+SPEAKING STYLE: Hinglish (Hindi + English mixed naturally)
+WRITING STYLE: Pure Devanagari script — NO Roman/English letters in narration AT ALL
 
-STRICTLY BANNED (sounds bookish/unnatural):
-- Heavy Sanskrit-origin words: "प्रभावशाली", "मनोवैज्ञानिक", "व्यवहार", "प्रतिक्रिया", "अनुभव", "परिणाम", "स्थिति", "विशेषता", "सम्बन्ध", "प्रेम"
-- Replace with: "impactful/powerful", "psychology", "behavior", "reaction", "experience", "result", "situation", "quality", "relationship", "love/pyaar"
-- Formal Hindi connectors: "तथा", "एवं", "किंतु", "परंतु", "अतः", "इसलिए" → use "aur", "but", "so", "kyunki"
+This means English words that Indians commonly use must be written in Devanagari phonetics:
+- "manipulation" → "मैनीपुलेशन"
+- "toxic" → "टॉक्सिक"
+- "mindset" → "माइंडसेट"
+- "basically" → "बेसिकली"
+- "confidence" → "कॉन्फिडेंस"
+- "feelings" → "फीलिंग्स"
+- "behavior" → "बिहेवियर"
+- "relationship" → "रिलेशनशिप"
+- "trigger" → "ट्रिगर"
+- "control" → "कंट्रोल"
+- "reality" → "रियलिटी"
+- "pattern" → "पैटर्न"
+- "actually" → "एक्चुअली"
+- "seriously" → "सीरियसली"
+- "obviously" → "ऑब्वियसली"
+- "mental" → "मेंटल"
+- "emotional" → "इमोशनल"
+- "trust" → "ट्रस्ट"
+- "respect" → "रिस्पेक्ट"
+- "situation" → "सिचुएशन"
+- "reaction" → "रिएक्शन"
+- "experience" → "एक्सपीरियंस"
+- "next move" → "नेक्स्ट मूव"
+- "start" → "स्टार्ट"
+- "result" → "रिज़ल्ट"
+- "point" → "पॉइंट"
 
-GOOD NARRATION EXAMPLE (Natural Indian speech):
-"Gaslighting ek manipulation tactic hai jisme koi tumhari memories aur feelings ko galat sabit karta hai — tumhe lagta hai tum hi crazy ho. Ye 3 signs pehchano aur apne aap ko protect karo."
+STRICTLY BANNED — heavy Sanskrit/bookish words that Indians never say in conversation:
+- "प्रभावशाली" → "पावरफुल" लिखो
+- "मनोवैज्ञानिक" → "साइकोलॉजी वाला" लिखो
+- "प्रतिक्रिया" → "रिएक्शन" लिखो
+- "परिणाम" → "रिज़ल्ट" लिखो
+- "विशेषता" → "क्वालिटी" लिखो
+- "तथा" / "एवं" → "और" लिखो
+- "किंतु" / "परंतु" → "लेकिन" लिखो
+- "अतः" → "तो" लिखो
 
-BAD NARRATION EXAMPLE (Shuddh Hindi — FORBIDDEN):
+GOOD EXAMPLE (natural Indian speech, pure Devanagari):
+"गैसलाइटिंग एक मैनीपुलेशन टैक्टिक है जिसमें कोई तुम्हारी मेमोरीज़ और फीलिंग्स को गलत साबित करता है — तुम्हें लगता है तुम ही क्रेज़ी हो। ये 3 साइन्स पहचानो।"
+
+BAD EXAMPLE (Shuddh Hindi — FORBIDDEN):
 "गैसलाइटिंग एक मनोवैज्ञानिक प्रक्रिया है जिसमें व्यक्ति आपकी स्मृतियों एवं भावनाओं को असत्य प्रमाणित करता है।"
 
 MANDATORY OUTPUT FORMAT - use EXACTLY these JSON keys, nothing else:
@@ -246,41 +277,67 @@ INPUT:
 
 LANGUAGE RULES — THIS IS THE MOST CRITICAL SECTION. READ CAREFULLY.
 
-Write in CONVERSATIONAL INDIAN HINDI (Urban Hindi / Hinglish). This is the language Indians actually speak and think in. NOT literary Sanskrit-based Hindi.
+SPEAKING STYLE: Conversational Urban Hindi — exactly like a smart Indian friend talks.
+WRITING STYLE: Pure Devanagari script — NO Roman/English letters in narration AT ALL.
 
-WHAT IS ALLOWED — Natural Indian speech mixes Hindi + English freely:
-- Psychology/social English terms: "manipulation", "toxic", "mindset", "behavior", "trigger", "pattern", "confidence", "relationship", "trust", "feelings", "mental health", "reality check", "basically", "actually", "obviously", "seriously", "anyway", "literally"
-- Everyday Hindi words: "log", "baat", "yaar", "sach mein", "matlab", "waise", "dekho", "samjho", "suno", "kal", "abhi", "kyunki", "toh", "phir", "lekin", "aur", "kuch", "bohot", "zyada", "thoda", "pata hai"
-- Numbers and examples should feel real: "90% log yahi karte hain", "3 saal mein realize hua"
-- Emotions should feel raw: "dil se bura lagta hai", "gussa aana normal hai"
+This means English words that Indians commonly use must be written in Devanagari phonetics:
+- "manipulation" → "मैनीपुलेशन"
+- "toxic" → "टॉक्सिक"
+- "mindset" → "माइंडसेट"
+- "basically" → "बेसिकली"
+- "confidence" → "कॉन्फिडेंस"
+- "feelings" → "फीलिंग्स"
+- "behavior" → "बिहेवियर"
+- "relationship" → "रिलेशनशिप"
+- "trigger" → "ट्रिगर"
+- "control" → "कंट्रोल"
+- "reality" → "रियलिटी"
+- "pattern" → "पैटर्न"
+- "actually" → "एक्चुअली"
+- "seriously" → "सीरियसली"
+- "mental" → "मेंटल"
+- "emotional" → "इमोशनल"
+- "trust" → "ट्रस्ट"
+- "respect" → "रिस्पेक्ट"
+- "situation" → "सिचुएशन"
+- "reaction" → "रिएक्शन"
+- "experience" → "एक्सपीरियंस"
+- "result" → "रिज़ल्ट"
+- "point" → "पॉइंट"
+- "next" → "नेक्स्ट"
+- "start" → "स्टार्ट"
+- "psychology" → "साइकोलॉजी"
 
-STRICTLY BANNED — These make script sound fake and bookish:
-Heavy Sanskrit words to AVOID → use these REPLACEMENTS instead:
-- "मनोवैज्ञानिक" → "psychology wala" or just "psychology"
-- "प्रभावशाली" → "powerful" or "impactful"  
-- "व्यवहार" → "behavior"
-- "प्रतिक्रिया" → "reaction"
-- "परिणाम" → "result"
-- "स्थिति" → "situation"
-- "विशेषता" → "quality" or "trait"
-- "सम्बन्ध" / "संबंध" → "relationship"
-- "अनुभव" → "experience"
-- "तथा" / "एवं" → "aur"
-- "किंतु" / "परंतु" → "lekin" or "but"
-- "अतः" / "इसलिए" → "toh" or "so"
-- "उपरोक्त" → just remove it
+STRICTLY BANNED — heavy Sanskrit/bookish words Indians never say:
+- "प्रभावशाली" → "पावरफुल" लिखो
+- "मनोवैज्ञानिक" → "साइकोलॉजिकल" लिखो
+- "प्रतिक्रिया" → "रिएक्शन" लिखो
+- "परिणाम" → "रिज़ल्ट" लिखो
+- "विशेषता" → "क्वालिटी" लिखो
+- "सम्बन्ध" / "संबंध" → "रिलेशनशिप" लिखो
+- "अनुभव" → "एक्सपीरियंस" लिखो
+- "तथा" / "एवं" → "और" लिखो
+- "किंतु" / "परंतु" → "लेकिन" लिखो
+- "अतः" → "तो" लिखो
+- "उपरोक्त" → हटा दो
 - Any word a 60-year-old professor would use → REPLACE IT
 
-TONE: Like a smart older brother/friend who genuinely cares and knows things. Confident, direct, warm. Uses "tum" not "aap". Uses rhetorical questions naturally.
+TONE: एक smart बड़े भाई की तरह जो genuinely care करता है। Confident, direct, warm। "तुम" use करो "आप" नहीं।
+
+GOOD EXAMPLE (natural, pure Devanagari):
+"देखो, गैसलाइटिंग एक मैनीपुलेशन टैक्टिक है। जब कोई बार-बार तुम्हारी फीलिंग्स को dismiss करे, बोले कि तुम ओवर-रिएक्ट कर रहे हो — एक्चुअली यही रेड फ्लैग है।"
+
+BAD EXAMPLE (Shuddh Hindi — FORBIDDEN):
+"गैसलाइटिंग एक मनोवैज्ञानिक प्रक्रिया है जिसमें व्यक्ति आपकी भावनाओं को असत्य प्रमाणित करता है।"
 
 EMOTION INDICATORS (on separate line BEFORE narration, never spoken aloud):
-(slowly) (serious tone) (mysterious) (excited) (warm/caring)
+(धीरे से) (गंभीर स्वर में) (रहस्यमय स्वर में) (उत्साह से) (प्यार से)
 
 SCENE MARKERS (on separate line, never spoken):
 [SCENE: nature_morning] [SCENE: office_tension] [SCENE: city_traffic]
 [SCENE: dark_alley] [SCENE: books_study] [SCENE: crowd_walking]
 
-SCRIPT SECTIONS (all narration in conversational Hinglish):
+SCRIPT SECTIONS (all narration in conversational Devanagari as described above):
 1. hook: 100-130 words — start with a shocking truth or bold statement
 2. problem_agitation: 200-280 words — make them feel seen and understood
 3. promise: 150-200 words — tell them exactly what they will get
