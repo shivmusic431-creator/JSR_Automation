@@ -422,7 +422,11 @@ jobs:
           sudo apt update
           sudo apt install -y fonts-noto fonts-noto-core fonts-noto-extra fonts-noto-ui-core fonts-noto-ui-extra
           fc-cache -fv
-          echo "✅ Noto Sans Devanagari fonts installed"
+          echo "✅ Fonts installed. Verifying Devanagari fonts:"
+          fc-list | grep -i devanagari | sort
+          echo "✅ Font file check:"
+          ls /usr/share/fonts/truetype/noto/ | grep -i devanagari || echo "⚠️ Not in truetype/noto/"
+          ls /usr/share/fonts/opentype/noto/ | grep -i devanagari 2>/dev/null || true
 
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
