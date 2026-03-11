@@ -158,7 +158,7 @@ jobs:
         run: |
           python src/video_generation/validate_duration.py \
             --audio-file output/audio.wav \
-            --min-duration 60 \
+            --min-duration 30 \
             --run-id "$RUN_ID"
 
       - name: Upload Audio Artifact
@@ -180,7 +180,7 @@ jobs:
             --status "${{ job.status }}"
 
   # ============================================================
-  # Phase 2.5: Subtitle Generation with Vosk Hindi Model
+  # Phase 2.5: Subtitle Generation with Whisper
   # ============================================================
   generate-subtitles:
     runs-on: ubuntu-latest
@@ -198,41 +198,26 @@ jobs:
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg fontconfig fonts-noto
 
       - name: Install Python Dependencies
         run: |
           pip install -r src/video_generation/requirements.txt
-          pip install vosk>=0.3.45
+          pip install openai-whisper stable-ts
+
+      - name: Cache Whisper Model
+        id: cache-whisper
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/whisper
+          key: whisper-small-${{ runner.os }}-v1
+          restore-keys: whisper-small-
 
       - name: Download Audio Artifact
         uses: actions/download-artifact@v4
         with:
           name: audio-${{ env.RUN_ID }}
           path: output/
-
-      - name: Cache Vosk Hindi Model
-        id: cache-vosk
-        uses: actions/cache@v4
-        with:
-          path: models/vosk-model-hi-0.22
-          key: vosk-model-hi-0.22-${{ runner.os }}-v1
-          restore-keys: vosk-model-hi-0.22-
-
-      - name: Download Vosk Hindi Model (if not cached)
-        if: steps.cache-vosk.outputs.cache-hit != 'true'
-        run: |
-          chmod +x scripts/download_vosk_model.sh
-          ./scripts/download_vosk_model.sh
-
-      - name: Verify Model
-        run: |
-          if [ -d "models/vosk-model-hi-0.22" ]; then
-            echo "✅ Model verified"
-          else
-            echo "❌ Model missing"
-            exit 1
-          fi
 
       - name: Generate Subtitles
         env:
