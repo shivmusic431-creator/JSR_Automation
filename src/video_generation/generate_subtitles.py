@@ -168,7 +168,6 @@ def transcribe(audio_path: Path) -> List[Dict]:
         str(audio_path),
         language=LANGUAGE,
         word_timestamps=True,
-        vad=True,              # voice activity detection — cleaner timestamps
         regroup=False,
     )
 
