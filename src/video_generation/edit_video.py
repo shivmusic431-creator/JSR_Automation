@@ -109,19 +109,41 @@ def format_subtitle_style(video_type: str = "long") -> str:
         )
 
 
+def get_font_meta(subtitles_file: str) -> dict:
+    """
+    generate_subtitles.py ke save kiye font_meta.json se font info load karo.
+    Fallback: known paths check karo.
+    """
+    meta_path = Path(subtitles_file).parent / "font_meta.json"
+    if meta_path.exists():
+        try:
+            with open(meta_path, 'r') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    # Fallback — common Ubuntu Noto font dirs
+    for d in ["/usr/share/fonts/truetype/noto", "/usr/share/fonts/opentype/noto", "/usr/share/fonts"]:
+        if Path(d).exists():
+            return {"font_dir": d, "font_path": "", "font_name": "Noto Sans Devanagari"}
+    return {"font_dir": "/usr/share/fonts", "font_path": "", "font_name": "Noto Sans Devanagari"}
+
+
 def get_subtitle_filter(subtitles_file: str, video_type: str = "short") -> str:
     """
-    Return FFmpeg subtitle filter.
-    - Both .ass and .srt use subtitles= filter (stable, supports ASS animations too)
-    - Simple relative path, no escaping needed on Linux
+    Return FFmpeg subtitle filter with correct fontsdir.
+    fontsdir parameter FFmpeg ko directly font directory deta hai
+    taaki fontconfig bypass ho aur Devanagari correctly render ho.
     """
     p = Path(subtitles_file)
-    style = format_subtitle_style(video_type)
+    font_meta = get_font_meta(subtitles_file)
+    font_dir = font_meta.get("font_dir", "/usr/share/fonts/truetype/noto")
+
     if p.suffix.lower() == ".ass":
-        # subtitles= filter supports .ass natively and is more stable than ass=
-        return f"subtitles={subtitles_file}"
+        # fontsdir se FFmpeg ko exact directory milti hai — fontconfig mismatch fix
+        return f"subtitles={subtitles_file}:fontsdir={font_dir}"
     else:
-        return f"subtitles={subtitles_file}:force_style='{style}'"
+        style = format_subtitle_style(video_type)
+        return f"subtitles={subtitles_file}:fontsdir={font_dir}:force_style='{style}'"
 
 def verify_subtitle_center_alignment(subtitles_file: Path) -> bool:
     """Verify subtitle file contains center alignment marker"""
