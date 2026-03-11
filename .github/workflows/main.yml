@@ -203,7 +203,7 @@ jobs:
       - name: Install Python Dependencies
         run: |
           pip install -r src/video_generation/requirements.txt
-          pip install openai-whisper stable-ts
+          pip install openai-whisper stable-ts packaging
 
       - name: Cache Whisper Model
         id: cache-whisper
