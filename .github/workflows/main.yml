@@ -263,6 +263,7 @@ jobs:
           path: |
             output/subtitles.ass
             output/subtitles.srt
+            output/font_meta.json
           retention-days: 1
 
       - name: Notify Tier 1
@@ -473,6 +474,7 @@ jobs:
           if [ -d "output/subtitles-${{ env.RUN_ID }}" ]; then
             cp output/subtitles-${{ env.RUN_ID }}/subtitles.ass output/ 2>/dev/null || true
             cp output/subtitles-${{ env.RUN_ID }}/subtitles.srt output/ 2>/dev/null || true
+            cp output/subtitles-${{ env.RUN_ID }}/font_meta.json output/ 2>/dev/null || true
             echo "✅ Subtitles copied"
           else
             echo "⚠️ Subtitles artifact dir not found"
