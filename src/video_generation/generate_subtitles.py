@@ -27,6 +27,42 @@ except ImportError:
     print("WARNING: Vosk not available - pip install vosk")
 
 # ============================================================================
+# FONT CONFIG
+# ============================================================================
+# Ubuntu pe Noto fonts install hone ke baad exact family name different hota hai
+# 'fc-list | grep -i devanagari' se actual name milta hai
+# Sabse reliable: NotoSansDevanagari-Regular.ttf ka direct path use karo
+FONT_PATHS_TO_TRY = [
+    "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSansDevanagari-Regular.otf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+]
+FONT_DIR = "/usr/share/fonts/truetype/noto"
+FONT_FAMILY = "Noto Sans Devanagari"
+
+def get_available_font_path() -> str:
+    """Return first available Devanagari font path"""
+    for fp in FONT_PATHS_TO_TRY:
+        if Path(fp).exists():
+            log(f"Font found: {fp}")
+            return fp
+    log("WARNING: No Devanagari font file found at known paths — using family name fallback")
+    return ""
+
+def get_available_font_dir() -> str:
+    """Return font directory for FFmpeg fontsdir"""
+    candidates = [
+        "/usr/share/fonts/truetype/noto",
+        "/usr/share/fonts/opentype/noto",
+        "/usr/share/fonts/noto",
+        "/usr/share/fonts",
+    ]
+    for d in candidates:
+        if Path(d).exists():
+            return d
+    return "/usr/share/fonts"
+
+# ============================================================================
 # CONFIG
 # ============================================================================
 MODEL_PATH = Path("models/vosk-model-hi-0.22")
@@ -118,9 +154,32 @@ def group_words(words: List[Dict]) -> List[Dict]:
 def write_ass(subtitles: List[Dict], path: Path, video_type: str = "short") -> bool:
     try:
         # 1080x1920 coordinate space for Shorts
-        # Alignment=8 → top-center; MarginV pushes down from top
-        # We place at ~55% height (Y = 1056 from top in 1920px space)
         pos_y = 1056  # ~55% of 1920
+
+        # Font detection — runtime pe available font use karo
+        font_path = get_available_font_path()
+        font_dir  = get_available_font_dir()
+
+        # ASS mein Fontname exact family name hona chahiye
+        # Agar direct file path mila toh fc-query se family name nikalo
+        # Fallback: "Noto Sans Devanagari" ya "NotoSansDevanagari"
+        font_name = FONT_FAMILY
+        if font_path:
+            try:
+                result = subprocess.run(
+                    ['fc-query', '--format=%{family}', font_path],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    # fc-query multiple names return karta hai comma separated
+                    detected = result.stdout.strip().split(',')[0].strip()
+                    if detected:
+                        font_name = detected
+                        log(f"Font family detected: {font_name}")
+            except Exception as fe:
+                log(f"fc-query failed ({fe}), using default font name: {font_name}")
+
+        log(f"Using font: '{font_name}' | dir: {font_dir}")
 
         header = (
             "[Script Info]\n"
@@ -134,9 +193,7 @@ def write_ass(subtitles: List[Dict], path: Path, video_type: str = "short") -> b
             "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,"
             "BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,"
             "BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding\n"
-            # FontSize=20, Bold, Yellow default, Black outline size 4, NO background (BorderStyle=1)
-            # Alignment=8 = top-center (we override position with pos_y via MarginV)
-            f"Style: Default,Noto Sans Devanagari,84,&H00FFFF00,&H000000FF,&H00000000,"
+            f"Style: Default,{font_name},84,&H00FFFF00,&H000000FF,&H00000000,"
             f"&H00000000,1,0,0,0,100,100,0,0,1,5,0,8,40,40,{pos_y},1\n\n"
             "[Events]\n"
             "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n"
@@ -145,8 +202,6 @@ def write_ass(subtitles: List[Dict], path: Path, video_type: str = "short") -> b
         event_lines = [header]
         for idx, sub in enumerate(subtitles):
             color = COLORS[idx % len(COLORS)]
-            # \fad(80,60) = 80ms fade-in, 60ms fade-out
-            # \c<color> = text color override for this block
             text = f"{{\\fad(80,60)\\c{color}}}{sub['text']}"
             event_lines.append(
                 f"Dialogue: 0,{ass_ts(sub['start'])},{ass_ts(sub['end'])},"
@@ -156,7 +211,14 @@ def write_ass(subtitles: List[Dict], path: Path, video_type: str = "short") -> b
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(event_lines))
-        log(f"ASS file written: {path} ({len(subtitles)} blocks)")
+
+        # Font dir ko alag metadata file mein save karo taaki edit_video use kar sake
+        font_meta = path.parent / "font_meta.json"
+        with open(font_meta, 'w') as fm:
+            import json as _json
+            _json.dump({"font_dir": font_dir, "font_path": font_path, "font_name": font_name}, fm)
+
+        log(f"ASS file written: {path} ({len(subtitles)} blocks) | font: {font_name}")
         return True
     except Exception as e:
         log(f"Failed to write ASS: {e}")
