@@ -222,7 +222,7 @@ Return ONLY raw JSON. No markdown. No explanation outside JSON.
     "word_count": 185,
     "estimated_duration": "0:57"
   }}
-}}}"""
+}}"""
 
 
 def create_script_prompt(category, sub_category, episode, title):
