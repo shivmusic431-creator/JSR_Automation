@@ -81,7 +81,7 @@ def format_subtitle_style(video_type: str = "long") -> str:
     """Fallback SRT style — used only if ASS file not available."""
     if video_type == "short":
         return (
-            "FontName=Noto Sans Devanagari Bold,"
+            "FontName=Noto Sans Devanagari,"
             "FontSize=84,"
             "Bold=1,"
             "PrimaryColour=&H00FFFF00,"
@@ -96,7 +96,7 @@ def format_subtitle_style(video_type: str = "long") -> str:
         )
     else:
         return (
-            "FontName=Noto Sans Devanagari Bold,"
+            "FontName=Noto Sans Devanagari,"
             "FontSize=84,"
             "Bold=1,"
             "PrimaryColour=&H00FFFFFF,"
