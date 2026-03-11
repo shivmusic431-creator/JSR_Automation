@@ -39,9 +39,9 @@ XTTS_SAMPLE_RATE        = 24000
 XTTS_LANGUAGE           = "hi"
 VOICE_CLONE_FILE        = "voices/my_voice.wav"
 
-XTTS_SPEED              = 1.2    # slightly fast = energetic delivery
-XTTS_TEMPERATURE        = 0.3    # LOW = no hallucination, no extra words
-XTTS_REPETITION_PENALTY = 5.0
+XTTS_SPEED              = 1.25    # slightly fast = energetic delivery
+XTTS_TEMPERATURE        = 0.75    # LOW = no hallucination, no extra words
+XTTS_REPETITION_PENALTY = 10.0
 
 # Natural pause durations (seconds)
 PAUSE_SENTENCE  = 0.45   # end of sentence (। ! ?)
